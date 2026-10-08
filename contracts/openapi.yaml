@@ -1,0 +1,260 @@
+openapi: 3.1.0
+info:
+  title: Waypoint AI API
+  version: 1.0.0
+  description: >-
+    HTTP status and metadata endpoints. Assistant turns are transported through
+    the WebSocket protocol documented in websocket.md.
+servers:
+  - url: http://127.0.0.1:8000
+    description: Local development backend
+paths:
+  /api/v1/healthz:
+    get:
+      operationId: getHealth
+      summary: Check backend liveness
+      responses:
+        '200':
+          description: Backend process is responsive.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HealthResponse'
+  /api/v1/assistant/capabilities:
+    get:
+      operationId: getAssistantCapabilities
+      summary: Read safe assistant readiness and supported filters
+      responses:
+        '200':
+          description: Readiness and public capabilities; no secrets or host paths.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CapabilitiesResponse'
+  /api/v1/assistant/history:
+    delete:
+      operationId: clearAssistantHistory
+      summary: Clear locally stored assistant conversation history for the demo workspace
+      responses:
+        '204':
+          description: All saved conversations for the local demo workspace were deleted.
+        '500':
+          description: The conversation store is unavailable.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [error]
+                properties:
+                  error: { type: string, const: internal_error }
+  /api/v1/map/route:
+    post:
+      operationId: buildMapRoute
+      summary: Calculate an optimized road route through up to eight verified map points
+      description: Coordinates are forwarded by the backend to the configured OSRM-compatible routing service. No prompt text or place names are sent.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/RouteRequest'
+      responses:
+        '200':
+          description: Road geometry, route metrics, and point order.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RoutePlan'
+        '400':
+          description: Invalid points or point count.
+        '502':
+          description: Routing service is unavailable or returned no route.
+  /api/v1/data/sources:
+    get:
+      operationId: listDataSources
+      summary: List sources enabled for the current user/workspace
+      responses:
+        '200':
+          description: Enabled source descriptors.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [sources]
+                properties:
+                  sources:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/DataSource'
+  /api/v1/data/places:
+    get:
+      operationId: searchMapPlaces
+      summary: Search locally imported named places and explicit address points
+      parameters:
+        - name: q
+          in: query
+          schema: { type: string, maxLength: 100 }
+        - name: category
+          in: query
+          schema: { type: string, maxLength: 120 }
+        - name: city
+          in: query
+          schema: { type: string, maxLength: 120 }
+        - name: sourceIds
+          in: query
+          description: Comma-separated source IDs; at most 20 are used.
+          schema: { type: string, maxLength: 500 }
+        - name: bbox
+          in: query
+          description: minLon,minLat,maxLon,maxLat; geographic coordinates in WGS84.
+          schema: { type: string, pattern: '^-?\d+(\.\d+)?,-?\d+(\.\d+)?,-?\d+(\.\d+)?,-?\d+(\.\d+)?$' }
+        - name: limit
+          in: query
+          schema: { type: integer, minimum: 1, maximum: 500, default: 100 }
+      responses:
+        '200':
+          description: Capped place results, map points, and source provenance.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [total, places, mapFeatures, sources]
+                properties:
+                  total: { type: integer, minimum: 0 }
+                  places:
+                    type: array
+                    items: { $ref: '#/components/schemas/Place' }
+                  mapFeatures:
+                    type: object
+                    required: [type, features]
+                    properties:
+                      type: { const: FeatureCollection }
+                      features: { type: array, items: { type: object } }
+                  sources:
+                    type: array
+                    items: { $ref: '#/components/schemas/DataSource' }
+        '400':
+          description: Invalid bbox or query.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [error]
+                properties:
+                  error: { type: string }
+components:
+  schemas:
+    HealthResponse:
+      type: object
+      required: [status, apiVersion]
+      properties:
+        status:
+          type: string
+          const: ok
+        apiVersion:
+          type: string
+          const: v1
+    CapabilitiesResponse:
+      type: object
+      required: [assistantStatus, transport, supportedFilters, demoMode]
+      properties:
+        assistantStatus:
+          type: string
+          enum: [ready, model_unavailable, data_unavailable, starting]
+        transport:
+          type: string
+          const: websocket
+        websocketPath:
+          type: string
+          const: /api/v1/assistant/ws
+        modelLabel:
+          type: [string, 'null']
+          description: Safe display name only; never return local paths or settings.
+        supportedFilters:
+          type: array
+          items:
+            type: string
+          examples: [[dateRange, sourceIds, polygonIds, category]]
+        demoMode:
+          type: boolean
+    DataSource:
+      type: object
+      required: [id, label, mode, status]
+      properties:
+        id:
+          type: string
+        label:
+          type: string
+        mode:
+          type: string
+          enum: [synthetic_local, public_snapshot, approved_live, client_api]
+        status:
+          type: string
+          enum: [ready, unavailable]
+        attribution:
+          type: [string, 'null']
+        snapshotDate:
+          type: [string, 'null']
+          format: date
+        sourceUrl:
+          type: [string, 'null']
+          format: uri
+        license:
+          type: [string, 'null']
+    Place:
+      type: object
+      required: [id, sourceId, name, lat, lon, category, countryCode, city, street, houseNumber, postcode]
+      properties:
+        id: { type: string }
+        sourceId: { type: string }
+        name: { type: string }
+        category: { type: [string, 'null'] }
+        countryCode: { type: [string, 'null'], pattern: '^[A-Z]{2}$' }
+        city: { type: [string, 'null'] }
+        street: { type: [string, 'null'] }
+        houseNumber: { type: [string, 'null'] }
+        postcode: { type: [string, 'null'] }
+        details:
+          type: object
+          additionalProperties: { type: string }
+        lat: { type: number, minimum: -90, maximum: 90 }
+        lon: { type: number, minimum: -180, maximum: 180 }
+    RouteRequest:
+      type: object
+      additionalProperties: false
+      required: [points]
+      properties:
+        points:
+          type: array
+          minItems: 2
+          maxItems: 8
+          items:
+            type: object
+            additionalProperties: false
+            required: [lat, lon]
+            properties:
+              lat: { type: number, minimum: -90, maximum: 90 }
+              lon: { type: number, minimum: -180, maximum: 180 }
+    RoutePlan:
+      type: object
+      required: [distanceMeters, durationSeconds, order, geometry]
+      properties:
+        distanceMeters: { type: number, minimum: 0 }
+        durationSeconds: { type: number, minimum: 0 }
+        order:
+          type: array
+          items: { type: integer, minimum: 0, maximum: 7 }
+        geometry:
+          type: object
+          required: [type, coordinates]
+          properties:
+            type: { const: LineString }
+            coordinates:
+              type: array
+              items:
+                type: array
+                prefixItems:
+                  - { type: number, minimum: -180, maximum: 180 }
+                  - { type: number, minimum: -90, maximum: 90 }
+                minItems: 2
+                maxItems: 2

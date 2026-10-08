@@ -1,0 +1,16 @@
+node_modules/
+dist/
+*.tsbuildinfo
+coverage/
+.env
+.env.*
+!.env.example
+.DS_Store
+npm-debug.log*
+data/local/
+*.log
+
+# Keep private working material and large recordings out of GitHub.
+/private/
+*.mp4
+*.mov

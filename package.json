@@ -1,0 +1,37 @@
+{
+  "name": "waypoint-ai",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "engines": {
+    "node": ">=22"
+  },
+  "workspaces": [
+    "frontend",
+    "backend",
+    "packages/shared"
+  ],
+  "scripts": {
+    "dev": "node scripts/dev.mjs",
+    "dev:backend": "npm run build -w @waypoint-ai/shared && npm run dev -w @waypoint-ai/backend",
+    "dev:frontend": "npm run build -w @waypoint-ai/shared && npm run dev -w @waypoint-ai/frontend",
+    "build": "npm run contracts:types && npm run build -w @waypoint-ai/shared && npm run build -w @waypoint-ai/backend && npm run build -w @waypoint-ai/frontend",
+    "typecheck": "npm run contracts:types && npm run build -w @waypoint-ai/shared && npm run typecheck -w @waypoint-ai/backend && npm run typecheck -w @waypoint-ai/frontend",
+    "test": "npm test --workspace=@waypoint-ai/backend",
+    "contracts:types": "openapi-typescript contracts/openapi.yaml -o packages/shared/src/openapi.generated.ts",
+    "db:migrate": "npm run db:migrate -w @waypoint-ai/backend",
+    "data:import:osm": "npm run data:import:osm -w @waypoint-ai/backend",
+    "data:import:europe": "bash scripts/import-europe-osm.sh",
+    "model:install:local": "bash model/ollama/scripts/install.sh",
+    "model:serve": "bash model/ollama/scripts/serve.sh",
+    "model:pull": "bash model/ollama/scripts/pull-model.sh",
+    "model:download": "bash model/ollama/scripts/pull-model.sh"
+  },
+  "devDependencies": {
+    "@types/node": "^22.0.0",
+    "openapi-typescript": "^7.0.0",
+    "sequelize-cli": "^6.6.0",
+    "tsx": "^4.0.0",
+    "typescript": "^5.7.0"
+  }
+}

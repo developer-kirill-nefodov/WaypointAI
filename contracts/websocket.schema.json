@@ -1,0 +1,279 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://waypoint-ai.invalid/contracts/websocket.schema.json",
+  "title": "Waypoint AI WebSocket protocol v1",
+  "description": "Client and server JSON text frames for /api/v1/assistant/ws",
+  "oneOf": [
+    { "$ref": "#/$defs/clientFrame" },
+    { "$ref": "#/$defs/serverFrame" }
+  ],
+  "$defs": {
+    "base": {
+      "type": "object",
+      "required": ["protocolVersion", "type"],
+      "properties": {
+        "protocolVersion": { "const": 1 },
+        "type": { "type": "string" },
+        "requestId": { "type": "string", "minLength": 1, "maxLength": 80 }
+      }
+    },
+    "scope": {
+      "type": "object",
+      "properties": {
+        "workspaceId": { "type": "string", "maxLength": 120 },
+        "dateRange": {
+          "type": ["object", "null"],
+          "properties": {
+            "from": { "type": "string", "format": "date-time" },
+            "to": { "type": "string", "format": "date-time" }
+          },
+          "additionalProperties": false
+        },
+        "polygonIds": { "type": "array", "items": { "type": "string", "maxLength": 120 }, "maxItems": 20 },
+        "sourceIds": { "type": "array", "items": { "type": "string", "maxLength": 120 }, "maxItems": 20 },
+        "filters": { "type": "object", "maxProperties": 20 },
+        "language": { "type": "string", "enum": ["en", "ru", "de"] },
+        "selectedMapItem": {
+          "type": "object", "required": ["type", "id"],
+          "properties": { "type": { "enum": ["place", "record"] }, "id": { "type": "string", "minLength": 1, "maxLength": 120 } },
+          "additionalProperties": false
+        }
+      }
+    },
+    "clientFrame": {
+      "oneOf": [
+        {
+          "allOf": [
+            { "$ref": "#/$defs/base" },
+            { "type": "object", "required": ["requestId"], "properties": { "type": { "const": "session.start" } } }
+          ]
+        },
+        {
+          "allOf": [
+            { "$ref": "#/$defs/base" },
+            {
+              "type": "object",
+              "required": ["requestId", "conversationId", "message", "scope"],
+              "properties": {
+                "type": { "const": "turn.submit" },
+                "conversationId": { "type": ["string", "null"], "maxLength": 120 },
+                "message": { "type": "string", "minLength": 1, "maxLength": 4000 },
+                "scope": { "$ref": "#/$defs/scope" }
+              }
+            }
+          ]
+        },
+        {
+          "allOf": [
+            { "$ref": "#/$defs/base" },
+            { "type": "object", "required": ["requestId"], "properties": { "type": { "const": "turn.cancel" } } }
+          ]
+        }
+      ]
+    },
+    "serverFrame": {
+      "oneOf": [
+        {
+          "allOf": [
+            { "$ref": "#/$defs/base" },
+            {
+              "type": "object",
+              "required": ["requestId", "connectionId", "assistantStatus", "modelLabel", "demoMode", "supportedFilters"],
+              "properties": {
+                "type": { "const": "session.ready" },
+                "connectionId": { "type": "string" },
+                "assistantStatus": { "enum": ["ready", "model_unavailable", "data_unavailable", "starting"] },
+                "modelLabel": { "type": ["string", "null"] },
+                "demoMode": { "type": "boolean" },
+                "supportedFilters": { "type": "array", "items": { "type": "string" } }
+              }
+            }
+          ]
+        },
+        {
+          "allOf": [
+            { "$ref": "#/$defs/base" },
+            { "type": "object", "required": ["requestId", "conversationId"], "properties": { "type": { "const": "turn.accepted" }, "conversationId": { "type": "string" } } }
+          ]
+        },
+        {
+          "allOf": [
+            { "$ref": "#/$defs/base" },
+            { "type": "object", "required": ["requestId", "phase", "label"], "properties": { "type": { "const": "turn.status" }, "phase": { "enum": ["understanding", "searching", "composing"] }, "label": { "type": "string", "maxLength": 160 } } }
+          ]
+        },
+        {
+          "allOf": [
+            { "$ref": "#/$defs/base" },
+            { "type": "object", "required": ["requestId", "tool", "label"], "properties": { "type": { "const": "tool.started" }, "tool": { "enum": ["search_records", "get_record_details", "search_places", "list_sources"] }, "label": { "type": "string", "maxLength": 160 } } }
+          ]
+        },
+        {
+          "allOf": [
+            { "$ref": "#/$defs/base" },
+            { "type": "object", "required": ["requestId", "tool", "recordsFound"], "properties": { "type": { "const": "tool.completed" }, "tool": { "enum": ["search_records", "get_record_details", "search_places", "list_sources"] }, "recordsFound": { "type": "integer", "minimum": 0 } } }
+          ]
+        },
+        {
+          "allOf": [
+            { "$ref": "#/$defs/base" },
+            { "type": "object", "required": ["requestId", "text"], "properties": { "type": { "const": "assistant.delta" }, "text": { "type": "string" } } }
+          ]
+        },
+        {
+          "allOf": [
+            { "$ref": "#/$defs/base" },
+            {
+              "type": "object",
+              "required": ["requestId", "conversationId", "message", "choices"],
+              "properties": {
+                "type": { "const": "turn.clarification" },
+                "conversationId": { "type": "string" },
+                "message": { "type": "string" },
+                "choices": { "type": "array", "items": { "type": "object", "required": ["id", "label"], "properties": { "id": { "type": "string" }, "label": { "type": "string" } } } }
+              }
+            }
+          ]
+        },
+        {
+          "allOf": [
+            { "$ref": "#/$defs/base" },
+            {
+              "type": "object",
+              "required": ["requestId", "conversationId", "assistantMessage", "appliedFilters", "result", "sources"],
+              "properties": {
+                "type": { "const": "turn.completed" },
+                "conversationId": { "type": "string" },
+                "assistantMessage": { "type": "string" },
+                "appliedFilters": { "type": "array", "items": { "type": "object" } },
+                "result": {
+                  "type": "object",
+                  "required": ["total", "records", "mapFeatures"],
+                    "properties": {
+                      "total": { "type": "integer", "minimum": 0 },
+                      "records": { "type": "array", "maxItems": 50, "items": { "$ref": "#/$defs/record" } },
+                      "places": { "type": "array", "maxItems": 50, "items": { "$ref": "#/$defs/place" } },
+                      "tripPlan": { "$ref": "#/$defs/tripPlan" },
+                    "mapFeatures": { "type": "object", "required": ["type", "features"], "properties": { "type": { "const": "FeatureCollection" }, "features": { "type": "array", "items": { "type": "object" } } } }
+                  },
+                  "additionalProperties": false
+                },
+                "sources": { "type": "array", "items": { "$ref": "#/$defs/source" } }
+              }
+            }
+          ]
+        },
+        {
+          "allOf": [
+            { "$ref": "#/$defs/base" },
+            { "type": "object", "required": ["requestId"], "properties": { "type": { "const": "turn.cancelled" } } }
+          ]
+        },
+        {
+          "allOf": [
+            { "$ref": "#/$defs/base" },
+            {
+              "type": "object",
+              "required": ["requestId", "code", "message", "retryable"],
+              "properties": {
+                "type": { "const": "turn.error" },
+                "code": { "enum": ["invalid_message", "unauthorized", "forbidden", "busy", "model_unavailable", "source_unavailable", "timeout", "internal_error"] },
+                "message": { "type": "string", "maxLength": 240 },
+                "retryable": { "type": "boolean" }
+              }
+            }
+          ]
+        }
+      ]
+    },
+    "record": {
+      "type": "object",
+      "required": ["id", "sourceId", "observedAt", "label", "lat", "lon", "accuracyMeters", "attributes"],
+      "properties": {
+        "id": { "type": "string" },
+        "sourceId": { "type": "string" },
+        "observedAt": { "type": "string", "format": "date-time" },
+        "label": { "type": "string" },
+        "lat": { "type": "number", "minimum": -90, "maximum": 90 },
+        "lon": { "type": "number", "minimum": -180, "maximum": 180 },
+        "accuracyMeters": { "type": ["number", "null"], "minimum": 0 },
+        "attributes": { "type": "object" }
+      }
+    },
+    "source": {
+      "type": "object",
+      "required": ["id", "label", "mode"],
+      "properties": {
+        "id": { "type": "string" },
+        "label": { "type": "string" },
+        "mode": { "enum": ["synthetic_local", "public_snapshot", "approved_live", "client_api"] },
+        "status": { "enum": ["ready", "unavailable"] },
+        "attribution": { "type": ["string", "null"] },
+        "snapshotDate": { "type": ["string", "null"], "format": "date" },
+        "sourceUrl": { "type": ["string", "null"], "format": "uri" },
+        "license": { "type": ["string", "null"] }
+      }
+    },
+    "place": {
+      "type": "object",
+      "required": ["id", "sourceId", "name", "category", "countryCode", "city", "street", "houseNumber", "postcode", "lat", "lon"],
+      "properties": {
+        "id": { "type": "string" },
+        "sourceId": { "type": "string" },
+        "name": { "type": "string" },
+        "category": { "type": ["string", "null"] },
+        "countryCode": { "type": ["string", "null"], "pattern": "^[A-Z]{2}$" },
+        "city": { "type": ["string", "null"] },
+        "street": { "type": ["string", "null"] },
+        "houseNumber": { "type": ["string", "null"] },
+        "postcode": { "type": ["string", "null"] },
+        "details": { "type": "object", "maxProperties": 12, "additionalProperties": { "type": "string", "maxLength": 300 } },
+        "lat": { "type": "number", "minimum": -90, "maximum": 90 },
+        "lon": { "type": "number", "minimum": -180, "maximum": 180 }
+      }
+    },
+    "tripPlan": {
+      "type": "object",
+      "required": ["status", "countryCode", "city", "totalDays", "supportedDays", "travelMode", "airport", "days", "sourceIds"],
+      "properties": {
+        "status": { "enum": ["ready", "partial"] },
+        "countryCode": { "type": "string", "pattern": "^[A-Z]{2}$" },
+        "city": { "type": "string", "minLength": 1, "maxLength": 120 },
+        "totalDays": { "type": "integer", "minimum": 1, "maximum": 7 },
+        "supportedDays": { "type": "integer", "minimum": 0, "maximum": 7 },
+        "travelMode": { "enum": ["driving", "none"] },
+        "airport": {
+          "type": ["object", "null"],
+          "required": ["placeId", "code", "name", "lat", "lon"],
+          "properties": {
+            "placeId": { "type": "string", "maxLength": 120 },
+            "code": { "enum": ["WAW", "WMI"] },
+            "name": { "type": "string", "maxLength": 240 },
+            "lat": { "type": "number", "minimum": -90, "maximum": 90 },
+            "lon": { "type": "number", "minimum": -180, "maximum": 180 }
+          },
+          "additionalProperties": false
+        },
+        "days": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 7,
+          "items": {
+            "type": "object",
+            "required": ["day", "area", "stopPlaceIds", "straightLineDistanceMetersFromAirport", "routeStatus"],
+            "properties": {
+              "day": { "type": "integer", "minimum": 1, "maximum": 7 },
+              "area": { "enum": ["airport_radius", "city"] },
+              "stopPlaceIds": { "type": "array", "maxItems": 50, "items": { "type": "string", "maxLength": 120 } },
+              "straightLineDistanceMetersFromAirport": { "type": "object", "additionalProperties": { "type": "integer", "minimum": 0 } },
+              "routeStatus": { "enum": ["pending", "not_requested", "unavailable"] }
+            },
+            "additionalProperties": false
+          }
+        },
+        "sourceIds": { "type": "array", "maxItems": 20, "uniqueItems": true, "items": { "type": "string", "maxLength": 120 } }
+      },
+      "additionalProperties": false
+    }
+  }
+}
