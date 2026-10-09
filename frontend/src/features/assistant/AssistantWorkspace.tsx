@@ -1,0 +1,688 @@
+import { lazy, Suspense, useEffect, useRef, useState, type FormEvent, type KeyboardEvent as ReactKeyboardEvent } from "react";
+import { ArrowUp, ArrowUpRight, BrainCircuit, ChevronDown, Clock3, House, Layers3, MapPinned, MoreHorizontal, Plus, RefreshCw, SlidersHorizontal, Sparkles, Square, Trash2 } from "lucide-react";
+import type { PlaceView, RecordView, Scope, ServerFrame, SourceView, TripPlan } from "@waypoint-ai/shared";
+import MapPanel from "../../widgets/map/MapPanel";
+import { clearAssistantHistory, connectAssistant, loadCapabilities, loadDataSources, type Capabilities, type ConnectionState } from "../../shared/api/client";
+import { readLanguage, translate, type Language, LANGUAGE_STORAGE_KEY } from "../../shared/i18n";
+import ModelInfoPage from "./ModelInfoPage";
+import HomeDashboard from "./HomeDashboard";
+
+type Message = { role: "assistant" | "user"; text: string; durationMs?: number; choices?: Array<{ id: string; label: string }> };
+type SuggestedReply = { label: string; prompt: string };
+type SavedChat = { id: string; conversationId: string | null; messages: Message[]; savedAt: number };
+type SavedConversation = SavedChat & { recentChats: SavedChat[] };
+const HISTORY_STORAGE_KEY = "waypoint-ai:assistant-history:v1";
+const MarkdownMessage = lazy(() => import("./MarkdownMessage"));
+
+function welcomeMessage(language: Language): Message {
+  return { role: "assistant", text: translate(language, "Привет! Я локальный помощник для поиска и изучения геоданных. Опишите, что хотите найти.", "Hi! I’m your local assistant for exploring geospatial data. Tell me what you’d like to find.") };
+}
+
+function starterReplies(language: Language): SuggestedReply[] {
+  if (language === "de") return [
+    { label: "Verfügbare Quellen", prompt: "Welche Datenquellen sind verfügbar?" },
+    { label: "Verfügbare Quellen", prompt: "Welche Datenquellen sind verfügbar?" },
+    { label: "Orte finden", prompt: "Finde Orte im geladenen Kartengebiet" },
+    { label: "Suche präzisieren", prompt: "Welche Fragen kann ich zu den verfügbaren Daten stellen?" },
+  ];
+  return language === "ru" ? [
+    { label: "Какие источники доступны?", prompt: "Какие данные доступны в приложении?" },
+    { label: "Какие источники доступны?", prompt: "Какие источники данных доступны?" },
+    { label: "Найти места", prompt: "Найди места в загруженной области карты" },
+    { label: "Помочь уточнить поиск", prompt: "Какие вопросы можно задать по доступным данным?" },
+  ] : [
+    { label: "Available data sources", prompt: "What data sources are available?" },
+    { label: "Available data sources", prompt: "What data sources are available?" },
+    { label: "Find places", prompt: "Find places in the loaded map area" },
+    { label: "Help refine a search", prompt: "What can I ask about the available data?" },
+  ];
+}
+
+export default function AssistantWorkspace() {
+  const [language, setLanguage] = useState<Language>(readLanguage);
+  const [activePage, setActivePage] = useState<"home" | "workspace" | "model">("home");
+  const [savedConversation] = useState(() => readSavedConversation(language));
+  const socketRef = useRef<WebSocket | null>(null);
+  const requestStartedAtRef = useRef<number | null>(null);
+  const messagesRef = useRef<HTMLDivElement | null>(null);
+  const followLatestMessageRef = useRef(true);
+  const sourcesRef = useRef<SourceView[]>([]);
+  const [capabilities, setCapabilities] = useState<Capabilities | null>(null);
+  const [connection, setConnection] = useState<ConnectionState>("connecting");
+  const [reconnectVersion, setReconnectVersion] = useState(0);
+  const [pending, setPending] = useState(false);
+  const [elapsedMs, setElapsedMs] = useState(0);
+  const [activeRequestId, setActiveRequestId] = useState<string | null>(null);
+  const [progressLabel, setProgressLabel] = useState<string | null>(null);
+  const [messages, setMessages] = useState<Message[]>(savedConversation.messages);
+  const [localChatId, setLocalChatId] = useState(savedConversation.id);
+  const [recentChats, setRecentChats] = useState<SavedChat[]>(savedConversation.recentChats);
+  const [draft, setDraft] = useState("");
+  const composerRef = useRef<HTMLTextAreaElement | null>(null);
+  const focusComposerOnWorkspaceRef = useRef(false);
+  const [conversationId, setConversationId] = useState<string | null>(savedConversation.conversationId);
+  const [historyClearWarning, setHistoryClearWarning] = useState<string | null>(null);
+  const [historyResetPending, setHistoryResetPending] = useState(false);
+  const [sources, setSources] = useState<SourceView[]>([]);
+  const [sourcesLoading, setSourcesLoading] = useState(true);
+  const [sourceLoadFailed, setSourceLoadFailed] = useState(false);
+  const [selectedSourceIds, setSelectedSourceIds] = useState<string[]>([]);
+  const [fromDate, setFromDate] = useState("");
+  const [toDate, setToDate] = useState("");
+  const [appliedFilters, setAppliedFilters] = useState<Array<Record<string, unknown>>>([]);
+  const [resultSources, setResultSources] = useState<SourceView[]>([]);
+  const [mapPlaces, setMapPlaces] = useState<PlaceView[]>([]);
+  const [mapRecords, setMapRecords] = useState<RecordView[]>([]);
+  const [tripPlan, setTripPlan] = useState<TripPlan | null>(null);
+  const [resultsLoaded, setResultsLoaded] = useState(false);
+  const [selectedResultKey, setSelectedResultKey] = useState<string | null>(null);
+  const [resetViewportRevision, setResetViewportRevision] = useState(0);
+  const [lastSubmittedQuery, setLastSubmittedQuery] = useState(() => lastUserMessage(savedConversation.messages));
+  const [suggestionOffset, setSuggestionOffset] = useState(0);
+  const [filtersExpanded, setFiltersExpanded] = useState(false);
+  const [suggestionsExpanded, setSuggestionsExpanded] = useState(false);
+
+  useEffect(() => {
+    setConnection("connecting");
+    setSourcesLoading(true);
+    setSourceLoadFailed(false);
+    const abort = new AbortController();
+    loadCapabilities(abort.signal).then(setCapabilities).catch(() => setCapabilities(null));
+    loadDataSources(abort.signal).then((loadedSources) => {
+      if (abort.signal.aborted) return;
+      sourcesRef.current = loadedSources;
+      setSources(loadedSources);
+      setSourceLoadFailed(false);
+    }).catch(() => { if (!abort.signal.aborted) setSourceLoadFailed(true); }).finally(() => { if (!abort.signal.aborted) setSourcesLoading(false); });
+    const socket = connectAssistant((frame) => {
+      if (frame.type === "session.ready") setCapabilities({ assistantStatus: frame.assistantStatus, modelLabel: frame.modelLabel, demoMode: frame.demoMode });
+      if (frame.type === "turn.status") setProgressLabel(frame.label);
+      if (frame.type === "tool.started") setProgressLabel(frame.label);
+      if (frame.type === "turn.accepted") setConversationId(frame.conversationId);
+      if (frame.type === "turn.error") {
+        const durationMs = elapsedSince(requestStartedAtRef.current);
+        requestStartedAtRef.current = null;
+        setPending(false);
+        setActiveRequestId(null);
+        setProgressLabel(null);
+        setMessages((current) => [...current, { role: "assistant", text: frame.message, durationMs }]);
+      }
+      if (frame.type === "turn.clarification") {
+        const durationMs = elapsedSince(requestStartedAtRef.current);
+        requestStartedAtRef.current = null;
+        setConversationId(frame.conversationId);
+        setPending(false);
+        setActiveRequestId(null);
+        setProgressLabel(null);
+        if (frame.choices.some((choice) => choice.id.startsWith("new-"))) {
+          setMapPlaces([]);
+          setMapRecords([]);
+          setTripPlan(null);
+          setSelectedResultKey(null);
+          setResetViewportRevision((revision) => revision + 1);
+        }
+        setMessages((current) => [...current, { role: "assistant", text: frame.message, choices: frame.choices, durationMs }]);
+      }
+      if (frame.type === "turn.completed") {
+        const durationMs = elapsedSince(requestStartedAtRef.current);
+        requestStartedAtRef.current = null;
+        setConversationId(frame.conversationId);
+        setPending(false);
+        setActiveRequestId(null);
+        setProgressLabel(null);
+        setMapPlaces(frame.result.places ?? []);
+        setMapRecords(frame.result.records);
+        setTripPlan(frame.result.tripPlan ?? null);
+        setResultsLoaded(true);
+        setSelectedResultKey(null);
+        setAppliedFilters(frame.appliedFilters);
+        setResultSources(frame.sources);
+        setSuggestionOffset(0);
+        setMessages((current) => current.at(-1)?.role === "assistant" && current.at(-1)?.text === frame.assistantMessage
+          ? [...current.slice(0, -1), { ...current.at(-1)!, durationMs }]
+          : [...current, { role: "assistant", text: frame.assistantMessage, durationMs }]);
+      }
+      if (frame.type === "turn.cancelled") {
+        const durationMs = elapsedSince(requestStartedAtRef.current);
+        requestStartedAtRef.current = null;
+        setPending(false);
+        setActiveRequestId(null);
+        setProgressLabel(null);
+        const activeLanguage = readLanguage();
+        setMessages((current) => [...current, { role: "assistant", text: translate(activeLanguage, "Запрос остановлен.", "Request stopped."), durationMs }]);
+      }
+      if (frame.type === "assistant.delta") setMessages((current) => {
+        const last = current.at(-1);
+        if (last?.role === "assistant") return [...current.slice(0, -1), { ...last, text: last.text + frame.text }];
+        return [...current, { role: "assistant", text: frame.text }];
+      });
+    }, (state) => {
+      if (socketRef.current !== socket) return;
+      setConnection(state);
+      if (state === "disconnected") {
+        setPending(false);
+        setActiveRequestId(null);
+        setProgressLabel(null);
+      }
+    }, (openSocket) => {
+      openSocket.send(JSON.stringify({ protocolVersion: 1, type: "session.start", requestId: crypto.randomUUID() }));
+    });
+    socketRef.current = socket;
+
+    return () => {
+      abort.abort();
+      if (socketRef.current === socket) socketRef.current = null;
+      socket.close();
+    };
+  }, [reconnectVersion]);
+
+  useEffect(() => {
+    if (activePage === "workspace" && focusComposerOnWorkspaceRef.current) {
+      composerRef.current?.focus();
+      focusComposerOnWorkspaceRef.current = false;
+    }
+  }, [activePage]);
+
+  useEffect(() => {
+    if (!pending || requestStartedAtRef.current === null) return;
+    const updateElapsed = () => setElapsedMs(elapsedSince(requestStartedAtRef.current));
+    updateElapsed();
+    const interval = window.setInterval(updateElapsed, 1000);
+    return () => window.clearInterval(interval);
+  }, [pending]);
+
+  useEffect(() => {
+    try { window.localStorage.setItem(LANGUAGE_STORAGE_KEY, language); } catch { /* Language preference is best-effort in private browsing. */ }
+  }, [language]);
+
+  useEffect(() => {
+    const closePopovers = (event: PointerEvent) => {
+      const target = event.target;
+      if (!(target instanceof Node)) return;
+      document.querySelectorAll<HTMLDetailsElement>("details[open]").forEach((popover) => {
+        if (!popover.contains(target)) popover.open = false;
+      });
+    };
+    const closeOnEscape = (event: KeyboardEvent) => {
+      if (event.key !== "Escape") return;
+      const openPopovers = [...document.querySelectorAll<HTMLDetailsElement>("details[open]")];
+      openPopovers.forEach((popover) => { popover.open = false; });
+      openPopovers.at(-1)?.querySelector<HTMLElement>("summary")?.focus();
+    };
+    document.addEventListener("pointerdown", closePopovers);
+    document.addEventListener("keydown", closeOnEscape);
+    return () => {
+      document.removeEventListener("pointerdown", closePopovers);
+      document.removeEventListener("keydown", closeOnEscape);
+    };
+  }, []);
+
+  useEffect(() => {
+    try {
+      window.localStorage.setItem(HISTORY_STORAGE_KEY, JSON.stringify({
+        id: localChatId,
+        conversationId,
+        messages: messages.slice(-100),
+        savedAt: Date.now(),
+        recentChats: recentChats.slice(0, 30),
+      }));
+    } catch {
+      setHistoryClearWarning(translate(language, "Не удалось сохранить переписку в браузере.", "Could not save the conversation in this browser."));
+    }
+  }, [conversationId, localChatId, messages, recentChats, language]);
+
+  useEffect(() => {
+    const viewport = messagesRef.current;
+    if (!viewport || !followLatestMessageRef.current) return;
+    viewport.scrollTop = viewport.scrollHeight;
+  }, [messages, pending, progressLabel]);
+
+  function submit(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    const message = draft.trim();
+    if (!message || pending || invalidDateRange(fromDate, toDate) || socketRef.current?.readyState !== WebSocket.OPEN) return;
+    const selectedMapItem = selectedResultKey?.startsWith("place:")
+      ? { type: "place" as const, id: selectedResultKey.slice("place:".length) }
+      : selectedResultKey?.startsWith("record:")
+        ? { type: "record" as const, id: selectedResultKey.slice("record:".length) }
+        : undefined;
+    const requestId = crypto.randomUUID();
+    setLastSubmittedQuery(message);
+    setSuggestionOffset(0);
+    setMapPlaces([]);
+    setMapRecords([]);
+    setTripPlan(null);
+    setResultsLoaded(false);
+    setSelectedResultKey(null);
+    setAppliedFilters([]);
+    setResultSources([]);
+    setPending(true);
+    requestStartedAtRef.current = performance.now();
+    setElapsedMs(0);
+    setActiveRequestId(requestId);
+    setProgressLabel(translate(language, "Отправляю запрос на локальный сервер", "Sending request to the local server"));
+    const dateRange: Scope["dateRange"] = fromDate || toDate ? {
+      ...(fromDate ? { from: localDateBoundary(fromDate, false) } : {}),
+      ...(toDate ? { to: localDateBoundary(toDate, true) } : {}),
+    } : null;
+    setMessages((current) => [...current, { role: "user", text: message }]);
+    socketRef.current.send(JSON.stringify({
+      protocolVersion: 1,
+      type: "turn.submit",
+      requestId,
+      conversationId,
+      message,
+      scope: { workspaceId: "demo", sourceIds: selectedSourceIds, polygonIds: [], dateRange, language, ...(selectedMapItem ? { selectedMapItem } : {}) },
+    }));
+    setDraft("");
+  }
+
+  function handleComposerKeyDown(event: ReactKeyboardEvent<HTMLTextAreaElement>) {
+    if (event.key === "Enter" && !event.shiftKey && !event.nativeEvent.isComposing) {
+      event.preventDefault();
+      event.currentTarget.form?.requestSubmit();
+    }
+  }
+
+  function updateDraft(value: string) {
+    setDraft(value);
+    setSuggestionOffset(0);
+  }
+
+  function chooseReply(prompt: string) {
+    setDraft(prompt);
+    setSuggestionOffset(0);
+    composerRef.current?.focus();
+  }
+
+  const draftQuery = draft.trim();
+  const activeQuery = draftQuery || lastSubmittedQuery;
+  const activeSuggestions = activeQuery
+    ? buildPromptSuggestions(activeQuery, draftQuery ? [] : mapRecords, draftQuery ? [] : mapPlaces, language)
+    : starterReplies(language);
+  const visibleSuggestions = rotateSuggestions(activeSuggestions, suggestionOffset);
+  const activeFilterCount = Number(selectedSourceIds.length > 0) + Number(Boolean(fromDate || toDate));
+
+  function cancelRequest() {
+    const requestId = activeRequestId;
+    if (!requestId || socketRef.current?.readyState !== WebSocket.OPEN) return;
+    socketRef.current.send(JSON.stringify({ protocolVersion: 1, type: "turn.cancel", requestId }));
+    setProgressLabel(translate(language, "Останавливаю запрос", "Stopping the request"));
+  }
+
+  function startNewConversation() {
+    if (pending) return;
+    followLatestMessageRef.current = true;
+    archiveCurrentConversation();
+    setLocalChatId(crypto.randomUUID());
+    setConversationId(null);
+    setMessages([welcomeMessage(language)]);
+    setDraft("");
+    setSuggestionsExpanded(false);
+    setMapPlaces([]);
+    setMapRecords([]);
+    setTripPlan(null);
+    setSelectedResultKey(null);
+    setResultsLoaded(false);
+    setAppliedFilters([]);
+    setResultSources([]);
+    setLastSubmittedQuery("");
+    setSuggestionOffset(0);
+  }
+
+  function archiveCurrentConversation() {
+    if (!messages.some((message) => message.role === "user")) return;
+    const archived: SavedChat = {
+      id: localChatId,
+      conversationId,
+      messages: messages.slice(-100),
+      savedAt: Date.now(),
+    };
+    setRecentChats((current) => [archived, ...current.filter((chat) => chat.id !== localChatId)]
+      .sort((a, b) => b.savedAt - a.savedAt)
+      .slice(0, 30));
+  }
+
+  function openRecentChat(id: string) {
+    if (pending) return;
+    const selected = recentChats.find((chat) => chat.id === id);
+    if (!selected) return;
+    followLatestMessageRef.current = true;
+    archiveCurrentConversation();
+    setRecentChats((current) => current.filter((chat) => chat.id !== id));
+    setLocalChatId(selected.id);
+    setConversationId(selected.conversationId);
+    setMessages(selected.messages);
+    setLastSubmittedQuery(lastUserMessage(selected.messages));
+    setSuggestionsExpanded(false);
+    setDraft("");
+    setMapPlaces([]);
+    setMapRecords([]);
+    setTripPlan(null);
+    setSelectedResultKey(null);
+    setResultsLoaded(false);
+    setAppliedFilters([]);
+    setResultSources([]);
+    setLastSubmittedQuery("");
+    setSuggestionOffset(0);
+  }
+
+  async function resetHistory() {
+    if (pending || historyResetPending) return;
+    if (!window.confirm(translate(language, "Удалить всю сохранённую историю чатов в браузере и на сервере? Это действие нельзя отменить.", "Delete all saved chat history from this browser and the server? This cannot be undone."))) return;
+    followLatestMessageRef.current = true;
+    setHistoryResetPending(true);
+    setHistoryClearWarning(null);
+    setConversationId(null);
+    setLocalChatId(crypto.randomUUID());
+    setRecentChats([]);
+    setMessages([welcomeMessage(language)]);
+    setDraft("");
+    setSuggestionsExpanded(false);
+    setMapPlaces([]);
+    setMapRecords([]);
+    setTripPlan(null);
+    setSelectedResultKey(null);
+    setResultsLoaded(false);
+    setAppliedFilters([]);
+    setResultSources([]);
+    setLastSubmittedQuery("");
+    setSuggestionOffset(0);
+    try {
+      await clearAssistantHistory();
+    } catch {
+      setHistoryClearWarning(translate(language, "Переписка очищена в браузере, но серверную историю удалить не удалось.", "Browser history was cleared, but server history could not be deleted."));
+    } finally {
+      setHistoryResetPending(false);
+    }
+  }
+
+  const status = capabilities?.assistantStatus ?? "starting";
+  const t = (ru: string, en: string) => translate(language, ru, en);
+  const statusText = status === "ready" ? translate(language, "Модель готова", "Model ready") : status === "data_unavailable" ? translate(language, "База недоступна", "Database unavailable") : status === "model_unavailable" ? translate(language, "Модель не подключена", "Model unavailable") : translate(language, "AI-обработчик не подключён", "AI service starting");
+  const dateRangeInvalid = invalidDateRange(fromDate, toDate);
+
+  function updateMessageScrollPosition() {
+    const viewport = messagesRef.current;
+    if (!viewport) return;
+    const remaining = viewport.scrollHeight - viewport.clientHeight - viewport.scrollTop;
+    followLatestMessageRef.current = remaining <= 48;
+  }
+
+  return (
+    <main className="app-shell">
+      <aside className="rail">
+        <button type="button" className="brand-mark" aria-label={t("На главную", "Go to home")} title={t("На главную", "Go to home")} onClick={() => { setActivePage("home"); window.scrollTo({ top: 0, behavior: "smooth" }); }}>LI</button>
+        <button type="button" className={`rail-button${activePage === "home" ? " active" : ""}`} aria-label={t("Главная", "Home")} title={t("Главная", "Home")} aria-pressed={activePage === "home"} onClick={() => { setActivePage("home"); window.scrollTo({ top: 0, behavior: "smooth" }); }}><House size={18} strokeWidth={1.8} /></button>
+        <button type="button" className={`rail-button${activePage === "workspace" ? " active" : ""}`} aria-label={t("Карта и чат", "Map and chat")} title={t("Карта и чат", "Map and chat")} aria-pressed={activePage === "workspace"} onClick={() => setActivePage("workspace")}><MapPinned size={18} strokeWidth={1.8} /></button>
+        <button type="button" className={`rail-button${activePage === "model" ? " active" : ""}`} aria-label={t("Модель ИИ", "AI model")} title={t("Модель ИИ", "AI model")} aria-pressed={activePage === "model"} onClick={() => setActivePage("model")}><BrainCircuit size={18} strokeWidth={1.8} /></button>
+        <div className="rail-spacer" />
+        <div className="avatar">U</div>
+      </aside>
+
+      <section className="workspace">
+        <h1 className="sr-only">{activePage === "model" ? t("Модель ИИ", "AI model") : activePage === "workspace" ? t("Карта и чат", "Map and chat") : t("Главная", "Home")}</h1>
+        {activePage === "model" ? <ModelInfoPage language={language} modelLabel={capabilities?.modelLabel ?? null} ready={status === "ready" || status === "data_unavailable"} /> : activePage === "home" ? <HomeDashboard language={language} modelLabel={capabilities?.modelLabel ?? null} modelReady={status === "ready" || status === "data_unavailable"} connection={connection} sources={sources} sourcesLoading={sourcesLoading} sourcesFailed={sourceLoadFailed} resultsLoaded={resultsLoaded} resultCount={mapPlaces.length + mapRecords.length} lastQuery={lastSubmittedQuery} onOpenWorkspace={() => setActivePage("workspace")} onOpenModel={() => setActivePage("model")} onChoosePrompt={(prompt) => { setDraft(prompt); setActivePage("workspace"); focusComposerOnWorkspaceRef.current = true; }} /> : <div className="content-grid">
+          <section className="chat-panel" aria-label={t("Чат помощника", "Assistant chat")}>
+            <div className="panel-heading chat-heading">
+              <div className="chat-heading-title"><span className="eyebrow">{t("ЛОКАЛЬНЫЙ ПОМОЩНИК", "LOCAL ASSISTANT")}</span><h2 title={conversationTitle(messages, language)}>{conversationTitle(messages, language)}</h2></div>
+              <div className="panel-heading-actions">
+                <button type="button" className="new-chat-button" disabled={pending || historyResetPending} onClick={startNewConversation}><Plus size={15} /><span>{t("Новый чат", "New chat")}</span></button>
+                <details className="chat-options">
+                  <summary className="icon-button" aria-label={t("Опции чата", "Chat options")} title={t("История и настройки", "History and settings")}><MoreHorizontal size={18} /></summary>
+                  <div className="chat-options-menu">
+                    <div className="chat-options-heading"><Clock3 size={14} /><span>{t("Недавние чаты", "Recent chats")}</span><small>{recentChats.length}</small></div>
+                    {recentChats.length ? <div className="recent-chat-list">
+                      {recentChats.map((chat) => <button key={chat.id} type="button" className="recent-chat-item" onClick={(event) => { openRecentChat(chat.id); event.currentTarget.closest("details")?.removeAttribute("open"); }}>
+                        <span>{conversationTitle(chat.messages, language)}</span><small>{formatChatDate(chat.savedAt, language)}</small>
+                      </button>)}
+                    </div> : <p className="chat-options-empty">{t("Новый чат сохраняет предыдущий здесь, чтобы вы могли к нему вернуться.", "Starting a new chat keeps the previous one here so you can return to it.")}</p>}
+                    {resultSources.length > 0 && <section className="chat-options-sources" aria-label={t("Источники последнего ответа", "Sources for the latest answer")}>
+                      <div className="chat-options-heading"><Layers3 size={14} /><span>{t("Источники последнего ответа", "Sources for the latest answer")}</span><small>{resultSources.length}</small></div>
+                      <div className="chat-option-source-list">{resultSources.map((source) => <div key={source.id} className="chat-option-source">
+                        <strong>{source.label}</strong>
+                        <span>{[source.license, source.snapshotDate ? `${t("снимок", "snapshot")} ${source.snapshotDate}` : null].filter(Boolean).join(" · ") || source.mode}</span>
+                      </div>)}</div>
+                    </section>}
+                    <p className="chat-history-note">{t("Хранится в этом браузере до 30 дней.", "Stored in this browser for up to 30 days.")}</p>
+                    <button type="button" className="clear-history-option" disabled={pending || historyResetPending} onClick={(event) => { void resetHistory(); event.currentTarget.closest("details")?.removeAttribute("open"); }}><Trash2 size={14} /><span>{t("Удалить всю историю", "Delete all history")}</span></button>
+                  </div>
+                </details>
+              </div>
+            </div>
+            <button type="button" className="section-toggle filters-toggle" aria-expanded={filtersExpanded} aria-controls="chat-filters" onClick={() => setFiltersExpanded((open) => !open)}><SlidersHorizontal size={15} /><span>{t("Фильтры", "Filters")}</span><small>{activeFilterCount ? `${activeFilterCount} ${t("активных", "active")}` : t("Источники и период", "Sources and date range")}</small><ChevronDown size={15} className="section-chevron" /></button>
+            <div id="chat-filters" className={`inline-disclosure${filtersExpanded ? " is-open" : ""}`} aria-hidden={!filtersExpanded} inert={!filtersExpanded}>
+              <div className="inline-disclosure-inner"><div className="scope-controls" aria-label={t("Фильтры запроса", "Query filters")}>
+                <details className="source-filter">
+                  <summary><span>{t("Источники", "Sources")}</span><strong>{selectedSourceIds.length ? `${t("Выбрано", "Selected")}: ${selectedSourceIds.length}` : t("Все", "All")}</strong></summary>
+                  <div className="source-filter-menu">
+                    {sources.map((source) => <label key={source.id} className="source-option">
+                      <input type="checkbox" checked={selectedSourceIds.includes(source.id)} disabled={!selectedSourceIds.includes(source.id) && selectedSourceIds.length >= 20} onChange={(event) => setSelectedSourceIds((current) => event.target.checked ? [...current, source.id] : current.filter((id) => id !== source.id))} />
+                      <span><strong>{source.label}</strong><small>{source.mode === "public_snapshot" ? t("Публичный снимок", "Public snapshot") : source.mode === "synthetic_local" ? t("Синтетические демо-данные", "Synthetic demo data") : source.mode}</small></span>
+                    </label>)}
+                    {!sources.length && <p className="source-empty">{sourceLoadFailed ? t("Не удалось загрузить источники", "Could not load sources") : capabilities?.assistantStatus === "data_unavailable" ? t("База данных пока недоступна", "Database is not available yet") : t("Источников пока нет", "No sources available")}</p>}
+                    {selectedSourceIds.length > 0 && <button type="button" className="clear-sources" onClick={() => setSelectedSourceIds([])}>{t("Сбросить выбор · использовать все", "Clear selection · use all sources")}</button>}
+                  </div>
+                </details>
+                <div className="date-filter">
+                  <label>{t("С", "From")} <input type="date" value={fromDate} max={toDate || undefined} onChange={(event) => setFromDate(event.target.value)} /></label>
+                  <label>{t("По", "To")} <input type="date" value={toDate} min={fromDate || undefined} onChange={(event) => setToDate(event.target.value)} /></label>
+                </div>
+                {dateRangeInvalid && <p className="filter-error" role="alert">{t("Начало периода должно быть раньше окончания.", "The start date must be before the end date.")}</p>}
+              </div></div>
+            </div>
+            <div className="messages-scroll-frame">
+              <div className="messages" ref={messagesRef} onScroll={updateMessageScrollPosition} tabIndex={0} aria-label={t("Сообщения чата", "Chat messages")}>
+                {messages.map((message, index) => <article key={`${index}-${message.role}`} className={`message ${message.role}`}>
+                  {message.role === "assistant" && <span className="message-avatar"><Sparkles size={14} /></span>}
+                  {message.role === "assistant" ? <div className="message-body"><div className="message-content"><Suspense fallback={<p>{message.text}</p>}><MarkdownMessage text={message.text} /></Suspense></div>{message.choices?.length ? <div className="clarification-choices">{message.choices.map((choice) => <button key={choice.id} type="button" disabled={pending} onClick={() => { setDraft(choice.label); composerRef.current?.focus(); }}>{choice.label}</button>)}</div> : null}{message.durationMs !== undefined && <span className="message-duration"><Clock3 size={12} aria-hidden="true" />{t("Время ответа", "Response time")} · {formatElapsed(message.durationMs, language)}</span>}</div> : <p>{message.text}</p>}
+                </article>)}
+                {pending && progressLabel && <div className="assistant-progress" role="status" aria-live="polite"><span className="progress-dot" /><span>{progressLabel}</span><span className="thinking-elapsed">{t("Думает", "Thinking")} · {formatElapsed(elapsedMs, language)}</span></div>}
+              </div>
+              <div className="chat-edge-fade chat-edge-fade-top" aria-hidden="true" />
+              <div className="chat-edge-fade chat-edge-fade-bottom" aria-hidden="true" />
+            </div>
+            {historyClearWarning && <div className="history-warning" role="status">{historyClearWarning}</div>}
+            {appliedFilters.length > 0 && <div className="applied-filters" aria-label={t("Применённые сервером фильтры", "Filters applied by the server")}>{formatAppliedFilters(appliedFilters, sourcesRef.current, language).map((filter) => <span key={filter}>{filter}</span>)}</div>}
+            <div className="suggestions-panel">
+              <div className="suggestions-heading">
+                <button type="button" className="section-toggle suggestions-toggle" aria-expanded={suggestionsExpanded} aria-controls="suggested-requests" onClick={() => setSuggestionsExpanded((open) => !open)}>
+                  <Sparkles size={14} /><span>{t("Актуальные подсказки", "Suggested follow-ups")}</span><small>{activeSuggestions.length}</small><ChevronDown size={14} className="section-chevron" />
+                </button>
+                {suggestionsExpanded && <button type="button" className="refresh-suggestions" onClick={() => setSuggestionOffset((offset) => (offset + 1) % activeSuggestions.length)} aria-label={t("Обновить подсказки", "Refresh suggestions")} title={t("Показать другие подсказки", "Show other suggestions")}><RefreshCw size={13} /><span>{t("Другие", "More")}</span></button>}
+              </div>
+              <div id="suggested-requests" className={`inline-disclosure${suggestionsExpanded ? " is-open" : ""}`} aria-hidden={!suggestionsExpanded} inert={!suggestionsExpanded}>
+                <div className="inline-disclosure-inner">
+                  {suggestionsExpanded && <div className="suggestions" aria-label={t("Рекомендуемые запросы", "Suggested prompts")}>{visibleSuggestions.map((reply) => <button key={reply.label} onClick={() => chooseReply(reply.prompt)}><span>{reply.label}</span><ArrowUpRight size={14} /></button>)}</div>}
+                </div>
+              </div>
+            </div>
+            <form className="composer" onSubmit={submit}>
+              <textarea ref={composerRef} value={draft} onChange={(event) => updateDraft(event.target.value)} onKeyDown={handleComposerKeyDown} placeholder={t("Введите запрос · Enter — отправить, Shift+Enter — новая строка", "Ask a question · Enter to send, Shift+Enter for a new line")} rows={2} aria-label={t("Сообщение помощнику", "Message the assistant")} />
+              <div className="composer-footer"><span>{t("Данные обрабатываются локально", "Data is processed locally")}</span><div className="composer-actions">{pending && <button type="button" className="cancel-request" onClick={cancelRequest}><Square size={12} />{t("Остановить", "Stop")}</button>}<button type="submit" disabled={!draft.trim() || pending || dateRangeInvalid || connection !== "connected"} aria-label={t("Отправить запрос", "Send request")}><ArrowUp size={17} /></button></div></div>
+            </form>
+          </section>
+
+          <MapPanel language={language} highlights={mapPlaces} records={mapRecords} tripPlan={tripPlan} sourceIds={selectedSourceIds} selectedResultKey={selectedResultKey} onSelectResult={setSelectedResultKey} sourceLabels={Object.fromEntries(sources.map((source) => [source.id, source.label]))} sourceDates={Object.fromEntries(sources.flatMap((source) => source.snapshotDate ? [[source.id, source.snapshotDate]] : []))} resultsLoaded={resultsLoaded} resetViewportRevision={resetViewportRevision} />
+        </div>}
+        <footer className="app-footer">
+          <div className="app-footer-brand">
+            <span className="footer-brand-mark">LI</span>
+            <div><strong>Waypoint AI</strong><span>{activePage === "model" ? t("ЛОКАЛЬНЫЙ ПОМОЩНИК", "LOCAL ASSISTANT") : activePage === "workspace" ? t("КАРТА И ЧАТ", "MAP AND CHAT") : t("ОБЗОР РАБОЧЕГО ПРОСТРАНСТВА", "WORKSPACE OVERVIEW")}</span></div>
+          </div>
+          <div className="app-footer-controls">
+            {capabilities?.demoMode && <span className="demo-badge">DEMO</span>}
+            <span className={`status-pill ${status}`} title={capabilities?.modelLabel ?? t("Локальная модель", "Local model")}><i />{capabilities?.modelLabel ?? t("Локальная модель", "Local model")} · {statusText}</span>
+            <span className={`connection ${connection}`}><i />{connection === "connected" ? t("Соединение активно", "Connected") : connection === "connecting" ? t("Подключаемся", "Connecting") : t("Нет соединения", "Disconnected")}</span>
+            {connection === "disconnected" && <button className="retry-button" type="button" onClick={() => setReconnectVersion((value) => value + 1)}>{t("Повторить соединение", "Reconnect")}</button>}
+            <div className="language-tabs" role="group" aria-label={t("Язык интерфейса", "Interface language")}>
+              {(["en", "ru", "de"] as const).map((option) => <button key={option} type="button" lang={option} aria-pressed={language === option} aria-label={option === "en" ? "English" : option === "ru" ? "Русский" : "Deutsch"} onClick={() => setLanguage(option)}>{option.toUpperCase()}</button>)}
+            </div>
+          </div>
+        </footer>
+      </section>
+    </main>
+  );
+}
+
+function readSavedConversation(language: Language): SavedConversation {
+  const empty: SavedConversation = { id: crypto.randomUUID(), conversationId: null, messages: [welcomeMessage(language)], savedAt: Date.now(), recentChats: [] };
+  try {
+    const raw = window.localStorage.getItem(HISTORY_STORAGE_KEY);
+    if (!raw) return empty;
+    const value: unknown = JSON.parse(raw);
+    if (!value || typeof value !== "object") return empty;
+    const saved = value as { id?: unknown; conversationId?: unknown; messages?: unknown; savedAt?: unknown; recentChats?: unknown };
+    if (typeof saved.savedAt !== "number" || Date.now() - saved.savedAt > 30 * 24 * 60 * 60 * 1000) {
+      window.localStorage.removeItem(HISTORY_STORAGE_KEY);
+      return empty;
+    }
+    const recentChats = Array.isArray(saved.recentChats) ? saved.recentChats
+      .filter((chat): chat is Record<string, unknown> => Boolean(chat && typeof chat === "object"))
+      .filter((chat) => typeof chat.id === "string" && typeof chat.savedAt === "number" && Date.now() - chat.savedAt <= 30 * 24 * 60 * 60 * 1000)
+      .map((chat) => ({
+        id: chat.id as string,
+        conversationId: typeof chat.conversationId === "string" && chat.conversationId.length <= 120 ? chat.conversationId : null,
+        messages: readMessages(chat.messages),
+        savedAt: chat.savedAt as number,
+      }))
+      .filter((chat) => chat.messages.some((message) => message.role === "user"))
+      .sort((a, b) => b.savedAt - a.savedAt)
+      .slice(0, 30) : [];
+    const messages = readMessages(saved.messages);
+    return {
+      id: typeof saved.id === "string" && saved.id.length <= 120 ? saved.id : crypto.randomUUID(),
+      conversationId: typeof saved.conversationId === "string" && saved.conversationId.length <= 120 ? saved.conversationId : null,
+      messages: messages.length ? messages : [welcomeMessage(language)],
+      savedAt: saved.savedAt,
+      recentChats,
+    };
+  } catch {
+    return empty;
+  }
+}
+
+function readMessages(value: unknown): Message[] {
+  return Array.isArray(value) ? value.filter((item): item is Message =>
+    Boolean(item && typeof item === "object" && "role" in item && "text" in item)
+    && ((item as Message).role === "user" || (item as Message).role === "assistant")
+    && typeof (item as Message).text === "string",
+  ).slice(-100) : [];
+}
+
+function lastUserMessage(messages: Message[]): string {
+  return [...messages].reverse().find((message) => message.role === "user")?.text ?? "";
+}
+
+function conversationTitle(messages: Message[], language: Language = "en"): string {
+  const firstRequest = messages.find((message) => message.role === "user")?.text.trim();
+  if (!firstRequest) return translate(language, "Новый запрос", "New chat");
+  return firstRequest.length > 42 ? `${firstRequest.slice(0, 42).trimEnd()}…` : firstRequest;
+}
+
+function formatChatDate(timestamp: number, language: Language): string {
+  return new Intl.DateTimeFormat(language === "ru" ? "ru-RU" : language === "de" ? "de-DE" : "en-US", { day: "numeric", month: "short" }).format(timestamp);
+}
+
+function elapsedSince(startedAt: number | null): number {
+  return startedAt === null ? 0 : Math.max(0, Math.round(performance.now() - startedAt));
+}
+
+function formatElapsed(milliseconds: number, language: Language): string {
+  const totalSeconds = Math.max(0, Math.round(milliseconds / 1000));
+  const minutes = Math.floor(totalSeconds / 60);
+  const seconds = totalSeconds % 60;
+  if (language === "ru") return minutes ? `${minutes} мин ${String(seconds).padStart(2, "0")} с` : `${seconds} с`;
+  if (language === "de") return minutes ? `${minutes} Min. ${String(seconds).padStart(2, "0")} Sek.` : `${seconds} Sek.`;
+  return minutes ? `${minutes} min ${String(seconds).padStart(2, "0")} sec` : `${seconds} sec`;
+}
+
+function localDateBoundary(value: string, endOfDay: boolean): string {
+  return new Date(`${value}T${endOfDay ? "23:59:59.999" : "00:00:00"}`).toISOString();
+}
+
+function invalidDateRange(from: string, to: string): boolean {
+  return Boolean(from && to && from > to);
+}
+
+function buildPromptSuggestions(query: string, records: RecordView[], places: PlaceView[], language: Language): SuggestedReply[] {
+  const shortQuery = query.replace(/\s+/g, " ").trim().slice(0, 100);
+  const suggestions: SuggestedReply[] = [];
+  if (language === "de") {
+    const firstRecord = records[0];
+    if (firstRecord) {
+      suggestions.push({ label: "Eintragsdetails ansehen", prompt: `Zeige Details zum Eintrag mit der ID ${firstRecord.id}` });
+      suggestions.push({ label: "Ergebnisse zusammenfassen", prompt: `Fasse die gefundenen Daten zu „${shortQuery}“ kurz zusammen.` });
+      suggestions.push({ label: "Suche erweitern", prompt: `Wiederhole „${shortQuery}“ mit breiteren Filtern und erkläre die Änderungen.` });
+    }
+    const firstPlace = places[0];
+    if (firstPlace) {
+      suggestions.push({ label: `Details zu ${firstPlace.name}`, prompt: `Zeige Adresse und Details zu „${firstPlace.name}“, gefunden bei der Suche „${shortQuery}“.` });
+      suggestions.push({ label: `Weitere Orte: ${firstPlace.category ?? "ähnliche Kategorie"}`, prompt: `Finde weitere Orte der Kategorie „${firstPlace.category ?? firstPlace.name}“ zur Anfrage „${shortQuery}“.` });
+      suggestions.push({ label: "Adressen prüfen", prompt: `Prüfe die Adressangaben der Orte aus der Suche „${shortQuery}“.` });
+    }
+    if (!suggestions.length) {
+      suggestions.push({ label: "Suche präzisieren", prompt: `Hilf dabei, die Suche „${shortQuery}“ anhand der verfügbaren Daten zu präzisieren.` });
+      suggestions.push({ label: "Verwandte Orte finden", prompt: `Finde Orte oder Adressen zur Anfrage „${shortQuery}“.` });
+      suggestions.push({ label: "Ergebnis erklären", prompt: `Erkläre, welche Daten zu „${shortQuery}“ verfügbar sind und warum es möglicherweise keine Treffer gibt.` });
+    }
+    return [...new Map(suggestions.map((suggestion) => [suggestion.prompt, suggestion])).values()].slice(0, 4);
+  }
+  const ru = language === "ru";
+  const firstRecord = records[0];
+  if (firstRecord) {
+    suggestions.push({ label: ru ? "Подробнее о найденной записи" : "View record details", prompt: ru ? `Покажи подробности записи с ID ${firstRecord.id}` : `Show details for record ID ${firstRecord.id}` });
+    const category = typeof firstRecord.attributes.category === "string" ? firstRecord.attributes.category : null;
+    suggestions.push(category
+      ? { label: ru ? `Ещё записи: ${category}` : `More records: ${category}`, prompt: ru ? `Найди другие записи категории «${category}», как в запросе «${shortQuery}».` : `Find more records in category “${category}” related to “${shortQuery}”.` }
+      : { label: ru ? "Другие совпадения" : "More matches", prompt: ru ? `Найди другие записи, относящиеся к запросу «${shortQuery}».` : `Find other records related to “${shortQuery}”.` });
+    suggestions.push({ label: ru ? "Кратко подвести итог" : "Summarize results", prompt: ru ? `Кратко подведи итог найденным данным по запросу «${shortQuery}».` : `Briefly summarize the data found for “${shortQuery}”.` });
+    suggestions.push({ label: ru ? "Расширить поиск" : "Broaden the search", prompt: ru ? `Повтори поиск «${shortQuery}» с более широкими условиями и укажи, что изменилось.` : `Repeat “${shortQuery}” with broader filters and explain what changed.` });
+  }
+  const firstPlace = places[0];
+  if (firstPlace) {
+    suggestions.push({
+      label: ru ? `Подробнее о месте: ${firstPlace.name}` : `View place details: ${firstPlace.name}`,
+      prompt: ru ? `Покажи адрес и подробности места «${firstPlace.name}», найденного по запросу «${shortQuery}».` : `Show the address and details for “${firstPlace.name}”, found for “${shortQuery}”.`,
+    });
+    suggestions.push(firstPlace.category
+      ? { label: ru ? `Ещё места: ${firstPlace.category}` : `More places: ${firstPlace.category}`, prompt: ru ? `Найди другие места категории «${firstPlace.category}», связанные с запросом «${shortQuery}».` : `Find other places in category “${firstPlace.category}” related to “${shortQuery}”.` }
+      : { label: ru ? "Похожие места" : "Similar places", prompt: ru ? `Найди другие места, похожие на «${firstPlace.name}», в данных для запроса «${shortQuery}».` : `Find places similar to “${firstPlace.name}” in the data for “${shortQuery}”.` });
+    suggestions.push({ label: ru ? "Проверить адреса" : "Check addresses", prompt: ru ? `Проверь адресные сведения для найденных по запросу «${shortQuery}» мест.` : `Check the address details for places found for “${shortQuery}”.` });
+    suggestions.push({ label: ru ? "Расширить поиск" : "Broaden the search", prompt: ru ? `Повтори поиск «${shortQuery}» с более широкой областью и укажи, что изменилось.` : `Repeat “${shortQuery}” in a broader area and explain what changed.` });
+  }
+  if (!suggestions.length) {
+    suggestions.push({ label: ru ? "Уточнить этот поиск" : "Refine this search", prompt: ru ? `Помоги уточнить поиск по запросу «${shortQuery}» с учётом доступных данных.` : `Help refine the search “${shortQuery}” using the available data.` });
+    suggestions.push({ label: ru ? "Изменить условия поиска" : "Change search filters", prompt: ru ? `Повтори запрос «${shortQuery}» с более широкими условиями и объясни, какие условия изменил.` : `Repeat “${shortQuery}” with broader filters and explain which filters changed.` });
+    suggestions.push({ label: ru ? "Проверить связанные места" : "Find related places", prompt: ru ? `Найди места или адреса, связанные с запросом «${shortQuery}».` : `Find places or addresses related to “${shortQuery}”.` });
+    suggestions.push({ label: ru ? "Пояснить результат" : "Explain the result", prompt: ru ? `Объясни, какие данные доступны для запроса «${shortQuery}» и почему совпадений могло не быть.` : `Explain which data is available for “${shortQuery}” and why it might have no matches.` });
+  }
+  return [...new Map(suggestions.map((suggestion) => [suggestion.prompt, suggestion])).values()].slice(0, 4);
+}
+
+function rotateSuggestions(suggestions: SuggestedReply[], offset: number): SuggestedReply[] {
+  if (suggestions.length <= 2) return suggestions;
+  const start = offset % suggestions.length;
+  return [suggestions[start]!, suggestions[(start + 1) % suggestions.length]!];
+}
+
+function formatAppliedFilters(filters: Array<Record<string, unknown>>, sources: SourceView[], language: Language): string[] {
+  const ru = language === "ru";
+  const de = language === "de";
+  const sourceNames = new Map(sources.map((source) => [source.id, source.label]));
+  return filters.flatMap((filter) => {
+    if (filter.key === "sourceIds" && Array.isArray(filter.value)) {
+      const names = filter.value.filter((id): id is string => typeof id === "string").map((id) => sourceNames.get(id) ?? id);
+      return names.length ? [`${ru ? "Источники" : de ? "Quellen" : "Sources"}: ${names.join(", ")}`] : [];
+    }
+    if (filter.key === "dateRange" && filter.value && typeof filter.value === "object") {
+      const range = filter.value as { from?: unknown; to?: unknown };
+      const locale = ru ? "ru-RU" : de ? "de-DE" : "en-US";
+      const from = typeof range.from === "string" ? new Date(range.from).toLocaleDateString(locale) : "…";
+      const to = typeof range.to === "string" ? new Date(range.to).toLocaleDateString(locale) : "…";
+      return [`${ru ? "Период" : de ? "Zeitraum" : "Date range"}: ${from} — ${to}`];
+    }
+    if (filter.key === "category" && typeof filter.value === "string") return [`${ru ? "Категория" : de ? "Kategorie" : "Category"}: ${filter.value}`];
+    return [];
+  });
+}

@@ -1,0 +1,412 @@
+import { useCallback, useEffect, useMemo, useState } from "react";
+import { ArrowUpRight, ChevronDown, Clock3, MapPin, Navigation, Route, RotateCw } from "lucide-react";
+import { CircleMarker, GeoJSON as LeafletGeoJSON, MapContainer, Popup, TileLayer, Tooltip, useMap, useMapEvents } from "react-leaflet";
+import { latLngBounds, type LatLngBounds } from "leaflet";
+import type { PlaceView, RecordView, TripPlan } from "@waypoint-ai/shared";
+import type { Feature, Geometry } from "geojson";
+import { buildRoute } from "../../shared/api/client";
+import { translate, type Language } from "../../shared/i18n";
+import "leaflet/dist/leaflet.css";
+import RouteLayer, { RouteGeometry, type RoutePoint, type RouteState } from "./RouteLayer";
+
+type MapPlace = PlaceView;
+type PlacesResponse = { total: number; places: MapPlace[] };
+type MapItem = { key: string; id: string; sourceId: string; name: string; category: string | null; lat: number; lon: number; kind: "place" | "record"; place?: PlaceView; record?: RecordView; summary?: string };
+
+const apiBase = import.meta.env.VITE_API_BASE ?? "";
+const tileUrl = import.meta.env.VITE_MAP_TILES_URL ?? "https://tile.openstreetmap.org/{z}/{x}/{y}.png";
+
+function ViewportPlaces({ onPlaces, sourceIds, enabled }: { onPlaces: (places: MapPlace[], total: number) => void; sourceIds: string[]; enabled: boolean }) {
+  const map = useMap();
+  const sourceFilter = sourceIds.join(",");
+  useEffect(() => {
+    let pending: AbortController | null = null;
+    let debounce: ReturnType<typeof setTimeout> | undefined;
+    if (!enabled) {
+      onPlaces([], 0);
+      return () => { pending?.abort(); if (debounce) clearTimeout(debounce); };
+    }
+
+    const load = () => {
+      if (map.getZoom() < 8) {
+        pending?.abort();
+        onPlaces([], 0);
+        return;
+      }
+      pending?.abort();
+      pending = new AbortController();
+      const bounds: LatLngBounds = map.getBounds();
+      const sw = bounds.getSouthWest();
+      const ne = bounds.getNorthEast();
+      const bbox = [sw.lng, sw.lat, ne.lng, ne.lat].map((value) => value.toFixed(6)).join(",");
+      const url = new URL(`${apiBase}/api/v1/data/places`, window.location.origin);
+      url.searchParams.set("bbox", bbox);
+      url.searchParams.set("limit", "500");
+      if (sourceFilter) url.searchParams.set("sourceIds", sourceFilter);
+      fetch(url, { signal: pending.signal })
+        .then((response) => { if (!response.ok) throw new Error("Places are unavailable"); return response.json() as Promise<PlacesResponse>; })
+        .then((result) => onPlaces(result.places, result.total))
+        .catch((error: unknown) => { if (!(error instanceof DOMException && error.name === "AbortError")) onPlaces([], 0); });
+    };
+    const schedule = () => { if (debounce) clearTimeout(debounce); debounce = setTimeout(load, 180); };
+    map.on("moveend", schedule);
+    schedule();
+    return () => {
+      pending?.abort();
+      if (debounce) clearTimeout(debounce);
+      map.off("moveend", schedule);
+    };
+  }, [enabled, map, onPlaces, sourceFilter]);
+  return null;
+}
+
+function ZoomLevel({ onZoom, selected }: { onZoom: (zoom: number) => void; selected: MapItem | undefined }) {
+  const map = useMapEvents({ zoomend: (event) => onZoom(event.target.getZoom()) });
+  useEffect(() => onZoom(map.getZoom()), [map, onZoom]);
+  const selectedKey = selected?.key;
+  const selectedLat = selected?.lat;
+  const selectedLon = selected?.lon;
+  useEffect(() => {
+    if (selectedKey && selectedLat !== undefined && selectedLon !== undefined) {
+      map.setView([selectedLat, selectedLon], Math.max(map.getZoom(), 15), { animate: false });
+    }
+  }, [map, selectedKey, selectedLat, selectedLon]);
+  return null;
+}
+
+function FitToResults({ items }: { items: MapItem[] }) {
+  const map = useMap();
+  const resultSignature = items.map((item) => `${item.key}:${item.lat},${item.lon}`).join("|");
+  useEffect(() => {
+    if (!items.length) return;
+    const bounds = latLngBounds(items.map((item) => [item.lat, item.lon] as [number, number]));
+    if (!bounds.isValid()) return;
+    if (items.length === 1 || bounds.getNorthEast().equals(bounds.getSouthWest())) {
+      const item = items[0]!;
+      map.setView([item.lat, item.lon], Math.max(map.getZoom(), 15), { animate: false });
+      return;
+    }
+    map.fitBounds(bounds, { padding: [42, 42], maxZoom: 14, animate: false });
+    // The point signature keeps viewport-only place fetches from resetting the user's map.
+  }, [map, resultSignature]);
+  return null;
+}
+
+function ResetViewport({ revision }: { revision: number }) {
+  const map = useMap();
+  useEffect(() => {
+    if (revision > 0) map.setView([49.8, 15.5], 4, { animate: false });
+  }, [map, revision]);
+  return null;
+}
+
+function MapSizeObserver() {
+  const map = useMap();
+  useEffect(() => {
+    const container = map.getContainer();
+    const observer = new ResizeObserver(() => map.invalidateSize({ animate: false, pan: false, debounceMoveend: true }));
+    observer.observe(container);
+    map.invalidateSize({ animate: false, pan: false, debounceMoveend: true });
+    return () => observer.disconnect();
+  }, [map]);
+  return null;
+}
+
+function FitToFocus({ focusKey, requestRevision, points, routePlan }: { focusKey: string | null; requestRevision: number; points: RoutePoint[]; routePlan: RouteState["plan"] }) {
+  const map = useMap();
+  const signature = `${focusKey ?? ""}:${requestRevision}:${points.map((point) => `${point.id}:${point.lat},${point.lon}`).join("|")}:${routePlan?.geometry.coordinates.map(([lon, lat]) => `${lon},${lat}`).join("|") ?? ""}`;
+  useEffect(() => {
+    if (!focusKey || !points.length) return;
+    map.invalidateSize({ animate: false, pan: false, debounceMoveend: true });
+    const coordinates = [
+      ...points.map((point) => [point.lat, point.lon] as [number, number]),
+      ...(routePlan?.geometry.coordinates.map(([lon, lat]) => [lat, lon] as [number, number]) ?? []),
+    ];
+    const bounds = latLngBounds(coordinates);
+    if (!bounds.isValid()) return;
+    if (coordinates.length === 1 || bounds.getNorthEast().equals(bounds.getSouthWest())) {
+      map.setView(coordinates[0]!, Math.max(map.getZoom(), 14), { animate: true });
+      return;
+    }
+    map.fitBounds(bounds, { padding: [48, 48], maxZoom: 13, animate: true });
+  }, [map, signature]);
+  return null;
+}
+
+export default function MapPanel({ language = "en", highlights = [], records = [], tripPlan = null, sourceIds = [], selectedResultKey, onSelectResult, sourceLabels = {}, sourceDates = {}, resultsLoaded = false, resetViewportRevision = 0 }: { language?: Language; highlights?: PlaceView[]; records?: RecordView[]; tripPlan?: TripPlan | null; sourceIds?: string[]; selectedResultKey: string | null; onSelectResult: (key: string) => void; sourceLabels?: Record<string, string>; sourceDates?: Record<string, string>; resultsLoaded?: boolean; resetViewportRevision?: number }) {
+  const [places, setPlaces] = useState<MapPlace[]>([]);
+  const [total, setTotal] = useState(0);
+  const [zoom, setZoom] = useState(4);
+  const [routeState, setRouteState] = useState<RouteState>({ status: "idle", plan: null, orderedPoints: [] });
+  const [routeExpanded, setRouteExpanded] = useState(false);
+  const [routeRetryKey, setRouteRetryKey] = useState(0);
+  const [dayRouteRetryKeys, setDayRouteRetryKeys] = useState<Record<number, number>>({});
+  const [dayRouteStates, setDayRouteStates] = useState<Record<number, RouteState>>({});
+  const [focusedDay, setFocusedDay] = useState<number | "city" | null>(null);
+  const [focusRevision, setFocusRevision] = useState(0);
+  const [countryShapes, setCountryShapes] = useState<Record<string, Feature<Geometry> | null>>({});
+  const handlePlaces = useCallback((next: MapPlace[], count: number) => { setPlaces(next); setTotal(count); }, []);
+  const handleZoom = useCallback((next: number) => setZoom(next), []);
+  const handleRouteState = useCallback((next: RouteState) => setRouteState(next), []);
+  const mapItems = useMemo((): MapItem[] => [...new Map([
+    ...places.map((place): MapItem => ({ ...place, key: `place:${place.id}`, kind: "place", place })),
+    ...highlights.map((place): MapItem => ({ ...place, key: `place:${place.id}`, kind: "place", place })),
+    ...records.map((record): MapItem => ({
+      key: `record:${record.id}`, id: record.id, sourceId: record.sourceId, name: record.label, category: typeof record.attributes.category === "string" ? record.attributes.category : null,
+      lat: record.lat, lon: record.lon, kind: "record", record,
+      summary: `${record.observedAt}${typeof record.attributes.place === "object" && record.attributes.place && "name" in record.attributes.place ? ` · ${String(record.attributes.place.name)}` : ""}`,
+    })),
+  ].map((item) => [item.key, item])).values()], [highlights, places, records]);
+  const resultItems = useMemo(() => mapItems.filter((item) => item.kind === "record" || highlights.some((place) => place.id === item.id)), [highlights, mapItems]);
+  const selectedItem = useMemo(() => mapItems.find((item) => item.key === selectedResultKey), [mapItems, selectedResultKey]);
+  const countryCodes = useMemo(() => [...new Set(highlights.map((place) => place.countryCode).filter((code): code is string => Boolean(code)))], [highlights]);
+  useEffect(() => {
+    let active = true;
+    if (!countryCodes.length) return () => { active = false; };
+    void import("./countryBoundaries").then(({ countryBoundary }) => {
+      if (active) setCountryShapes(Object.fromEntries(countryCodes.map((code) => [code, countryBoundary(code)])));
+    });
+    return () => { active = false; };
+  }, [countryCodes]);
+  const countryBoundaries = countryCodes.map((code) => ({ code, feature: countryShapes[code] ?? null })).filter((item): item is { code: string; feature: Feature<Geometry> } => Boolean(item.feature));
+  const routeCandidates = useMemo(() => {
+    const counts = new Map<string, number>();
+    for (const place of highlights) if (place.countryCode) counts.set(place.countryCode, (counts.get(place.countryCode) ?? 0) + 1);
+    const dominantCountry = [...counts].sort((left, right) => right[1] - left[1])[0]?.[0];
+    if (!dominantCountry) return { points: [] as RoutePoint[], total: 0 };
+    const distinct = [...new Map(highlights.filter((place) => place.countryCode === dominantCountry).map((place) => [place.id, place])).values()];
+    return {
+      points: distinct.slice(0, 8).map((place): RoutePoint => ({ id: place.id, name: place.name, lat: place.lat, lon: place.lon, countryCode: place.countryCode!, city: place.city })),
+      total: distinct.length,
+    };
+  }, [highlights]);
+  const routePoints = routeCandidates.points;
+  const tripPlacesById = useMemo(() => new Map(highlights.map((place) => [place.id, place])), [highlights]);
+  const tripRouteInputs = useMemo(() => tripPlan?.days.map((day) => {
+    const places = day.stopPlaceIds.flatMap((id) => {
+      const place = tripPlacesById.get(id);
+      return place ? [{ id: place.id, name: place.name, lat: place.lat, lon: place.lon, countryCode: place.countryCode ?? tripPlan.countryCode, city: place.city }] : [];
+    });
+    const points: RoutePoint[] = day.area === "airport_radius" && tripPlan.airport
+      ? [{ id: tripPlan.airport.placeId, name: tripPlan.airport.name, lat: tripPlan.airport.lat, lon: tripPlan.airport.lon, countryCode: tripPlan.countryCode, city: tripPlan.city }, ...places]
+      : places;
+    return { day: day.day, area: day.area, points, routeStatus: day.routeStatus };
+  }) ?? [], [tripPlan, tripPlacesById]);
+  const focusPoints = useMemo(() => {
+    if (focusedDay === "city") return tripRouteInputs.filter((route) => route.area === "city").flatMap((route) => route.points);
+    if (focusedDay === null) return [];
+    const route = tripRouteInputs.find((item) => item.day === focusedDay);
+    const routedPoints = dayRouteStates[focusedDay]?.status === "ready" ? dayRouteStates[focusedDay]!.orderedPoints : null;
+    return routedPoints ?? route?.points ?? [];
+  }, [dayRouteStates, focusedDay, tripRouteInputs]);
+  const focusRoute = focusedDay === "city"
+    ? null
+    : focusedDay === null ? null : dayRouteStates[focusedDay]?.plan ?? null;
+  const focusedPlaceIds = useMemo(() => new Set(focusPoints.map((point) => point.id)), [focusPoints]);
+  const focusedPlaceOrder = useMemo(() => new Map(focusPoints.map((point, index) => [point.id, index + 1])), [focusPoints]);
+  useEffect(() => { setDayRouteStates({}); setDayRouteRetryKeys({}); setFocusedDay(null); }, [tripPlan]);
+  const handleDayRouteState = useCallback((day: number, state: RouteState) => {
+    setDayRouteStates((current) => current[day]?.status === state.status && current[day]?.plan === state.plan ? current : { ...current, [day]: state });
+  }, []);
+  const t = (ru: string, en: string) => translate(language, ru, en);
+  return (
+    <section className="map-panel" aria-label={t("Карта и результаты", "Map and results")}>
+      <div className="map-toolbar"><div><span className="eyebrow">OPENSTREETMAP · {t("ЕВРОПА · 6 РЕГИОНОВ", "EUROPE · 6 REGIONS")}</span><h2>{t("Места и адреса", "Places and addresses")}</h2></div><span className="map-cap">{t("зум", "zoom")} {zoom}+</span></div>
+      <div className="map-canvas">
+        <MapContainer center={[49.8, 15.5]} zoom={zoom} minZoom={3} maxZoom={19} scrollWheelZoom>
+          <MapSizeObserver />
+          <ResetViewport revision={resetViewportRevision} />
+          <FitToResults items={resultItems} />
+          <FitToFocus focusKey={focusedDay === null ? null : String(focusedDay)} requestRevision={focusRevision} points={focusPoints} routePlan={focusRoute} />
+          <ViewportPlaces onPlaces={handlePlaces} sourceIds={sourceIds} enabled={resultItems.length === 0} />
+          <ZoomLevel onZoom={handleZoom} selected={selectedItem} />
+          {tileUrl && <TileLayer url={tileUrl} attribution='&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap contributors</a>' />}
+          {countryBoundaries.map(({ code, feature }) => <LeafletGeoJSON key={code} data={feature} style={{ color: "#f0bb69", weight: 2, opacity: 0.95, fillColor: "#e4aa55", fillOpacity: 0.08, dashArray: "5 5" }} interactive={false} />)}
+          {tripPlan ? tripRouteInputs.map((route) => route.routeStatus === "pending" && <TripRouteLayer key={`${tripPlan.totalDays}:${route.day}:${route.points.map((point) => point.id).join(",")}`} day={route.day} points={route.points} retryKey={dayRouteRetryKeys[route.day] ?? 0} onState={handleDayRouteState} />) : <RouteLayer points={routePoints} retryKey={routeRetryKey} onState={handleRouteState} />}
+          {tripPlan ? tripRouteInputs.map((route) => <RouteGeometry key={`geometry-${route.day}`} plan={focusedDay !== null && (focusedDay !== "city" ? focusedDay !== route.day : route.area !== "city") ? null : dayRouteStates[route.day]?.plan ?? null} points={focusedDay !== null && (focusedDay !== "city" ? focusedDay !== route.day : route.area !== "city") ? [] : dayRouteStates[route.day]?.orderedPoints ?? []} color={routeColors[(route.day - 1) % routeColors.length]} />) : <RouteGeometry plan={routeState.plan} points={routeState.orderedPoints} />}
+          {mapItems.map((item) => {
+            const selected = item.key === selectedResultKey;
+            const focused = focusedPlaceIds.has(item.id);
+            return <CircleMarker key={item.key} center={[item.lat, item.lon]} radius={focused ? 10 : selected ? 11 : item.kind === "record" || highlights.some((place) => place.id === item.id) ? 7 : 4} eventHandlers={{ click: () => onSelectResult(item.key) }} pathOptions={{ color: focused || selected ? "#ffffff" : item.kind === "record" ? "#ffe0a8" : "#8bdbb3", fillColor: focused ? "#31b57f" : selected ? "#58d9a0" : item.kind === "record" ? "#d8844a" : "#45a77c", fillOpacity: 0.95, weight: focused || selected ? 3 : 1 }}>
+              <Popup><strong>{item.name}</strong><br /><small>{item.category ?? (item.kind === "place" ? t("Место", "Place") : t("Запись", "Record"))}</small>{item.summary && <><br />{item.summary}</>}</Popup>
+              {focused && <Tooltip permanent direction="top" offset={[0, -8]} className="focused-stop-label">{focusedPlaceOrder.get(item.id)}</Tooltip>}
+            </CircleMarker>;
+          })}
+        </MapContainer>
+        {countryBoundaries.length > 0 && <div className="boundary-legend"><span aria-hidden="true" />{t("Страны:", "Countries:")} {countryBoundaries.map(({ code }) => countryName(code, language)).join(" · ")}{tripPlan && <><span className="city-focus-dot" aria-hidden="true" />{t("Точки города:", "City points:")} {tripPlan.city}{focusedDay === "city" ? ` · ${focusPoints.length}` : focusedDay !== null ? ` · ${t("день", "day")} ${focusedDay}` : ""}</>}</div>}
+        {!tripPlan && routeState.status !== "idle" && <RouteSummary language={language} state={routeState} totalPoints={routeCandidates.total} expanded={routeExpanded} onToggle={() => setRouteExpanded((value) => !value)} onRetry={() => setRouteRetryKey((value) => value + 1)} />}
+      </div>
+      {tripPlan && <TripPlanBoard language={language} plan={tripPlan} highlights={highlights} routeStates={dayRouteStates} sourceLabels={sourceLabels} sourceDates={sourceDates} focusedDay={focusedDay} selectedPlaceId={selectedItem?.kind === "place" ? selectedItem.id : null} onSelectDay={(day) => { setFocusedDay(day); setFocusRevision((revision) => revision + 1); const failed = day !== "city" && dayRouteStates[day]?.status === "error"; if (failed) setDayRouteRetryKeys((current) => ({ ...current, [day]: (current[day] ?? 0) + 1 })); }} onSelectPlace={(id) => onSelectResult(`place:${id}`)} />}
+      {!tripPlan && <section className="server-results" aria-label={t("Результаты запроса", "Query results")}>
+        <div className="server-results-heading"><strong>{t("Результаты запроса", "Query results")}</strong><span>{resultItems.length.toLocaleString(language === "ru" ? "ru-RU" : language === "de" ? "de-DE" : "en-US")}</span></div>
+        {resultItems.length ? <div className="server-results-list">
+          {resultItems.map((item) => <button type="button" key={item.key} className={`server-result${selectedResultKey === item.key ? " selected" : ""}`} aria-pressed={selectedResultKey === item.key} onClick={() => onSelectResult(item.key)}>
+            <span className="server-result-icon">{item.kind === "record" ? <Clock3 size={15} /> : <MapPin size={15} />}</span>
+            <span className="server-result-copy"><strong>{item.name}</strong><small>{[item.category ?? (item.kind === "record" ? t("Запись", "Record") : t("Место", "Place")), sourceLabels[item.sourceId] ?? t("Источник", "Source"), item.summary].filter(Boolean).join(" · ")}</small></span>
+            <span className="server-result-arrow"><ArrowUpRight size={14} /></span>
+          </button>)}
+        </div> : <p className="server-results-empty">{resultsLoaded ? t("По этому запросу совпадений не найдено.", "No matches found for this query.") : t("Результаты сервера появятся здесь после запроса.", "Server results will appear here after a query.")}</p>}
+      </section>}
+      {selectedItem && <SelectedItemCard language={language} item={selectedItem} sourceLabel={sourceLabels[selectedItem.sourceId] ?? selectedItem.sourceId} tripContext={tripPlan ? getTripContext(selectedItem.id, tripPlan, dayRouteStates) : null} />}
+      {!tripPlan && <div className="results-footer"><div><strong>{resultItems.length ? t("Точки запроса", "Query points") : t("Места в области карты", "Places in map area")}</strong><span>{resultItems.length ? t("Показаны найденные объекты", "Showing query matches") : zoom < 8 ? t("Увеличьте карту для поиска", "Zoom in to search") : places.length < total ? `${t("Показаны первые", "Showing first")} ${places.length}` : t("Локальная выгрузка", "Local extract")}</span></div><span className="result-count">{(resultItems.length || total).toLocaleString(language === "ru" ? "ru-RU" : language === "de" ? "de-DE" : "en-US")}</span></div>}
+    </section>
+  );
+}
+
+const routeColors = ["#41cda0", "#e0a84d", "#75a8ff", "#c78bff"];
+
+function TripRouteLayer({ day, points, retryKey, onState }: { day: number; points: RoutePoint[]; retryKey: number; onState: (day: number, state: RouteState) => void }) {
+  const signature = points.map((point) => `${point.id}:${point.lat},${point.lon}`).join("|");
+  useEffect(() => {
+    if (points.length < 2 || points.length > 8) {
+      onState(day, { status: "error", plan: null, orderedPoints: [] });
+      return;
+    }
+    const controller = new AbortController();
+    onState(day, { status: "loading", plan: null, orderedPoints: [] });
+    buildRoute(points.map(({ lat, lon }) => ({ lat, lon })), controller.signal)
+      .then((plan) => {
+        const orderedPoints = plan.order.map((index) => points[index]).filter((point): point is RoutePoint => Boolean(point));
+        if (orderedPoints.length !== points.length) throw new Error("Invalid route order");
+        onState(day, { status: "ready", plan, orderedPoints });
+      })
+      .catch((error: unknown) => {
+        if (!(error instanceof DOMException && error.name === "AbortError")) onState(day, { status: "error", plan: null, orderedPoints: [] });
+      });
+    return () => controller.abort();
+  }, [day, signature, retryKey, onState]);
+  return null;
+}
+
+function TripPlanBoard({ language, plan, highlights, routeStates, sourceLabels, sourceDates, focusedDay, selectedPlaceId, onSelectDay, onSelectPlace }: { language: Language; plan: TripPlan; highlights: PlaceView[]; routeStates: Record<number, RouteState>; sourceLabels: Record<string, string>; sourceDates: Record<string, string>; focusedDay: number | "city" | null; selectedPlaceId: string | null; onSelectDay: (day: number | "city") => void; onSelectPlace: (id: string) => void }) {
+  const places = new Map(highlights.map((place) => [place.id, place]));
+  const t = (ru: string, en: string) => translate(language, ru, en);
+  const title = t("План поездки", "Trip plan");
+  const snapshotDates = [...new Set(plan.sourceIds.flatMap((sourceId) => sourceDates[sourceId] ? [sourceDates[sourceId]!] : []))];
+  return <section className="trip-plan-board" aria-label={title}>
+    <header className="trip-plan-heading">
+      <div><span className="eyebrow">{t("ЛОКАЛЬНЫЕ ДАННЫЕ · ПРОВЕРЕННЫЕ ТОЧКИ", "LOCAL DATA · VERIFIED PLACES")}</span><button type="button" className="trip-plan-city-button" aria-pressed={focusedDay === "city"} onClick={() => onSelectDay("city")}><h3>{title}: {plan.city}, {countryName(plan.countryCode, language)}</h3><small>{t("Показать все точки города", "Show all city points")}</small></button></div>
+      <span className={`trip-plan-status ${plan.status}`}>{plan.status === "ready" ? t("Точки распределены", "Stops organized") : t("Частично", "Partial")}</span>
+    </header>
+    {plan.days.map((day) => {
+      const state = routeStates[day.day];
+      const dayPlaces = day.stopPlaceIds.map((id) => places.get(id)).filter((place): place is PlaceView => Boolean(place));
+      if (state?.status === "ready") {
+        const routeOrder = new Map(state.orderedPoints.map((point, index) => [point.id, index]));
+        dayPlaces.sort((left, right) => (routeOrder.get(left.id) ?? Number.MAX_SAFE_INTEGER) - (routeOrder.get(right.id) ?? Number.MAX_SAFE_INTEGER));
+      }
+      const area = day.area === "airport_radius" ? `${plan.airport?.code ?? ""} · ${t("рядом с аэропортом", "near the airport")}` : plan.city;
+      const routeLabel = plan.travelMode === "none" ? t("Маршрут не запрашивался", "Route not requested")
+        : state?.status === "ready" ? `${t("Маршрут построен", "Route calculated")} · ${formatDistance(state.plan?.distanceMeters ?? 0, language)} · ~${Math.max(1, Math.round((state.plan?.durationSeconds ?? 0) / 60))} ${t("мин", "min")}`
+          : state?.status === "loading" ? t("Считаю маршрут по дорогам…", "Calculating road route…")
+            : state?.status === "error" || day.routeStatus === "unavailable" ? t("Маршрут недоступен; точки сохранены", "Route unavailable; places are still shown")
+              : t("Ожидается расчёт маршрута", "Waiting for route calculation");
+      return <article className={`trip-plan-day${focusedDay === day.day ? " focused" : ""}`} key={day.day}>
+        <div className="trip-plan-day-heading"><button type="button" className="trip-plan-day-focus" aria-pressed={focusedDay === day.day} onClick={() => onSelectDay(day.day)}><span className="trip-day-number">{day.day}</span><span><strong>{t("День", "Day")} {day.day} · {area}</strong><small>{routeLabel}</small></span><span className="trip-route-swatch" style={{ backgroundColor: routeColors[(day.day - 1) % routeColors.length] }} aria-hidden="true" /></button>{state?.status === "error" && <button type="button" className="trip-day-retry" aria-label={t(`Повторить маршрут для дня ${day.day}`, `Retry route for day ${day.day}`)} onClick={() => onSelectDay(day.day)}><RotateCw size={14} /></button>}</div>
+        {day.area === "airport_radius" && plan.airport && <button type="button" className="trip-plan-stop trip-plan-airport" aria-pressed={selectedPlaceId === plan.airport.placeId} onClick={() => onSelectPlace(plan.airport!.placeId)}><span className="trip-stop-number">✈</span><span><strong>{plan.airport.name}</strong><small>{plan.airport.code} · {t("начало маршрута", "route origin")}</small></span></button>}
+        {dayPlaces.length ? <ol className="trip-plan-stops">{dayPlaces.map((place, index) => {
+          const distance = day.straightLineDistanceMetersFromAirport[place.id];
+          return <li key={place.id}><button type="button" className="trip-plan-stop" aria-pressed={selectedPlaceId === place.id} onClick={() => onSelectPlace(place.id)}><span className="trip-stop-number">{index + (day.area === "airport_radius" && plan.airport ? 2 : 1)}</span><span><strong>{place.name}</strong><small>{[place.category, place.city, sourceLabels[place.sourceId], distance !== undefined ? `${formatDistance(distance, language)} ${t("по прямой от аэропорта", "straight-line from airport")}` : null].filter(Boolean).join(" · ")}</small></span><ArrowUpRight size={14} /></button></li>;
+        })}</ol> : <p className="trip-plan-empty">{t("В локальном снимке не найдено точек для этого дня.", "No places for this day were found in the local snapshot.")}</p>}
+      </article>;
+    })}
+    <p className="trip-plan-footnote">{t("План собран сервером из точек локального снимка OpenStreetMap.", "The backend assembled this plan from the local OpenStreetMap snapshot.")} {snapshotDates.length ? `${t("Дата снимка", "Snapshot date")}: ${snapshotDates.join(" · ")}.` : t("Дата снимка не указана в метаданных источника.", "The source metadata does not include a snapshot date.")} {t("Расстояния от аэропорта показаны по прямой; дорожная геометрия и время появляются только после успешного ответа сервиса маршрутов.", "Airport distances are straight-line; road geometry and time appear only after the routing service responds.")}</p>
+  </section>;
+}
+
+function formatDistance(meters: number, language: Language): string {
+  return meters >= 1000 ? `${(meters / 1000).toLocaleString(language === "ru" ? "ru-RU" : language === "de" ? "de-DE" : "en-US", { maximumFractionDigits: 1 })} km` : `${Math.round(meters)} m`;
+}
+
+function RouteSummary({ language, state, totalPoints, expanded, onToggle, onRetry }: { language: Language; state: RouteState; totalPoints: number; expanded: boolean; onToggle: () => void; onRetry: () => void }) {
+  const t = (ru: string, en: string) => translate(language, ru, en);
+  const plan = state.plan;
+  const routeArea = [...new Set(state.orderedPoints.map((point) => point.city).filter((city): city is string => Boolean(city)))];
+  const areaLabel = routeArea.length === 1 ? routeArea[0] : countryName(state.orderedPoints[0]?.countryCode ?? "", language);
+  const distance = plan ? plan.distanceMeters >= 1000
+    ? `${(plan.distanceMeters / 1000).toLocaleString(language === "ru" ? "ru-RU" : language === "de" ? "de-DE" : "en-US", { maximumFractionDigits: 1 })} km`
+    : `${Math.round(plan.distanceMeters)} m` : null;
+  const minutes = plan ? Math.max(1, Math.round(plan.durationSeconds / 60)) : null;
+  return <section className={`route-summary route-summary-${state.status}`} aria-live="polite">
+    <div className="route-summary-heading">
+      <span className="route-summary-icon"><Route size={16} /></span>
+      <div className="route-summary-title"><strong>{t("Маршрут по найденным местам", "Route through found places")}</strong><small>{state.status === "loading" ? t("Подбираю порядок остановок…", "Optimizing stop order…") : state.status === "error" ? t("Сервис маршрутов сейчас недоступен", "Routing service is unavailable") : `${areaLabel} · ${t("дороги · OSRM", "road route · OSRM")}`}</small></div>
+      {state.status === "ready" && <button type="button" className="route-toggle" onClick={onToggle} aria-expanded={expanded} aria-label={expanded ? t("Свернуть остановки", "Collapse stops") : t("Показать остановки", "Show stops")}><ChevronDown size={16} /></button>}
+      {state.status === "error" && <button type="button" className="route-toggle" onClick={onRetry} aria-label={t("Повторить", "Retry")}><RotateCw size={15} /></button>}
+    </div>
+    {state.status === "ready" && plan && <>
+      <div className="route-metrics"><span><Navigation size={13} />{distance}</span><span><Clock3 size={13} />~{t(`${minutes} мин`, `${minutes} min`)}</span><span>{state.orderedPoints.length} {t("остановок", "stops")}</span></div>
+      {totalPoints > state.orderedPoints.length && <p className="route-limit-note">{t(`Маршрут строится по первым ${state.orderedPoints.length} из ${totalPoints} мест.`, `Route includes the first ${state.orderedPoints.length} of ${totalPoints} places.`)}</p>}
+      {expanded && <ol className="route-stop-list">{state.orderedPoints.map((point, index) => <li key={`${point.id}:${index}`}><span>{index + 1}</span><strong>{point.name}</strong></li>)}</ol>}
+    </>}
+  </section>;
+}
+
+function SelectedItemCard({ language, item, sourceLabel, tripContext }: { language: Language; item: MapItem; sourceLabel: string; tripContext: { day: number; stop: number; totalStops: number; area: "airport_radius" | "city" } | null }) {
+  const t = (ru: string, en: string) => translate(language, ru, en);
+  const address = item.place
+    ? [item.place.street && [item.place.street, item.place.houseNumber].filter(Boolean).join(" "), item.place.postcode, item.place.city].filter(Boolean).join(", ")
+    : null;
+  const attributes = item.record
+    ? Object.entries(item.record.attributes).filter(([, value]) => value === null || ["string", "number", "boolean"].includes(typeof value)).slice(0, 8)
+    : [];
+  return <section className="selected-item-card" aria-label={t("Карточка выбранного объекта", "Selected item details")}>
+    <div className="selected-item-heading"><span className="selected-item-icon">{item.kind === "record" ? <Clock3 size={16} /> : <MapPin size={16} />}</span><div><span className="eyebrow">{item.kind === "record" ? t("ДЕМО-ЗАПИСЬ", "DEMO RECORD") : t("МЕСТО НА КАРТЕ", "MAP PLACE")}</span><h3>{item.name}</h3></div></div>
+    <dl className="selected-item-grid">
+      {tripContext && <div className="selected-item-wide selected-trip-context"><dt>{t("В плане поездки", "Trip plan")}</dt><dd>{t(`День ${tripContext.day} · точка ${tripContext.stop} из ${tripContext.totalStops}`, `Day ${tripContext.day} · stop ${tripContext.stop} of ${tripContext.totalStops}`)} · {tripContext.area === "airport_radius" ? t("район аэропорта", "airport area") : item.place?.city ?? t("город", "city")}</dd></div>}
+      <div><dt>{t("Категория", "Category")}</dt><dd>{item.category ?? t("Не указана", "Not specified")}</dd></div>
+      {item.place?.countryCode && <div><dt>{t("Страна", "Country")}</dt><dd>{countryName(item.place.countryCode, language)}</dd></div>}
+      <div><dt>{t("Источник", "Source")}</dt><dd>{sourceLabel}</dd></div>
+      {address && <div className="selected-item-wide"><dt>{t("Адрес", "Address")}</dt><dd>{address || t("Адрес не указан", "No address provided")}</dd></div>}
+      {item.place?.details && Object.entries(item.place.details).map(([key, value]) => {
+        const websiteUrl = key === "website" ? safeWebsiteUrl(value) : null;
+        return <div key={key} className="selected-item-wide"><dt>{placeDetailLabel(key, language)}</dt><dd>{websiteUrl ? <a href={websiteUrl} target="_blank" rel="noreferrer">{value}</a> : value}</dd></div>;
+      })}
+      {item.record && <div><dt>{t("Время записи", "Record time")}</dt><dd>{formatObservedAt(item.record.observedAt, language)}</dd></div>}
+      {item.record?.accuracyMeters !== null && item.record?.accuracyMeters !== undefined && <div><dt>{t("Точность", "Accuracy")}</dt><dd>±{item.record.accuracyMeters} m</dd></div>}
+      <div className="selected-item-wide"><dt>{t("Координаты", "Coordinates")}</dt><dd>{item.lat.toFixed(6)}, {item.lon.toFixed(6)}</dd></div>
+      {attributes.map(([key, value]) => <div key={key}><dt>{humanizeField(key)}</dt><dd>{value === null ? "—" : String(value)}</dd></div>)}
+    </dl>
+  </section>;
+}
+
+function getTripContext(placeId: string, plan: TripPlan, routeStates: Record<number, RouteState>): { day: number; stop: number; totalStops: number; area: "airport_radius" | "city" } | null {
+  for (const day of plan.days) {
+    const fallbackOrder = day.area === "airport_radius" && plan.airport ? [plan.airport.placeId, ...day.stopPlaceIds] : day.stopPlaceIds;
+    const routeOrder = routeStates[day.day]?.status === "ready" ? routeStates[day.day]!.orderedPoints.map((point) => point.id) : fallbackOrder;
+    const stopIndex = routeOrder.indexOf(placeId);
+    if (stopIndex >= 0) return { day: day.day, stop: stopIndex + 1, totalStops: routeOrder.length, area: day.area };
+    if (day.area === "airport_radius" && plan.airport?.placeId === placeId) return { day: day.day, stop: 1, totalStops: day.stopPlaceIds.length + 1, area: day.area };
+  }
+  return null;
+}
+
+function safeWebsiteUrl(value: string): string | null {
+  try {
+    const normalized = value.trim();
+    const candidate = /^[a-z][a-z\d+.-]*:/i.test(normalized) ? normalized : `https://${normalized}`;
+    const url = new URL(candidate);
+    return url.protocol === "https:" || url.protocol === "http:" ? url.toString() : null;
+  } catch {
+    return null;
+  }
+}
+
+function placeDetailLabel(key: string, language: Language): string {
+  const labels: Record<string, [string, string]> = { tourism: ["Тип туристического объекта", "Tourism type"], historic: ["Историческая категория", "Historic category"], cuisine: ["Кухня", "Cuisine"], opening_hours: ["Часы работы по OSM", "OSM opening hours"], wheelchair: ["Доступность", "Wheelchair access"], website: ["Сайт", "Website"], description: ["Описание из OSM", "OSM description"], fee: ["Платный вход", "Entry fee"], internet_access: ["Интернет", "Internet access"], wikidata: ["Wikidata", "Wikidata"] };
+  return labels[key] ? translate(language, ...labels[key]!) : key;
+}
+
+function formatObservedAt(value: string, language: Language): string {
+  const date = new Date(value);
+  return Number.isNaN(date.getTime()) ? value : new Intl.DateTimeFormat(language === "ru" ? "ru-RU" : language === "de" ? "de-DE" : "en-US", { dateStyle: "medium", timeStyle: "short" }).format(date);
+}
+
+function humanizeField(value: string): string {
+  return value.replace(/([a-zа-я])([A-ZА-Я])/g, "$1 $2").replace(/[_-]+/g, " ").replace(/^./, (first) => first.toLocaleUpperCase());
+}
+
+function countryName(code: string, language: Language): string {
+  const names: Record<string, [string, string]> = { DE: ["Германия", "Germany"], PL: ["Польша", "Poland"], RO: ["Румыния", "Romania"], FR: ["Франция", "France"], IT: ["Италия", "Italy"], ES: ["Испания", "Spain"] };
+  return names[code] ? translate(language, ...names[code]!) : code;
+}
