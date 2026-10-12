@@ -22,3 +22,18 @@ export function polygonCenter(points: Coordinate[]): Coordinate | null {
     lat: vertices.reduce((sum, point) => sum + point.lat, 0) / vertices.length,
   };
 }
+
+/** minLon, minLat, maxLon, maxLat in WGS84 degrees. */
+export type Bbox = [number, number, number, number];
+
+/** Four finite values in range with min strictly below max on both axes. */
+export function isValidBbox(values: number[]): values is Bbox {
+  if (values.length !== 4 || !values.every(Number.isFinite)) return false;
+  const [minLon, minLat, maxLon, maxLat] = values as Bbox;
+  return minLon >= -180
+    && maxLon <= 180
+    && minLon < maxLon
+    && minLat >= -90
+    && maxLat <= 90
+    && minLat < maxLat;
+}

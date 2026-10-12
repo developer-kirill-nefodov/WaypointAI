@@ -3,7 +3,8 @@ info:
   title: Waypoint AI API
   version: 1.0.0
   description: >-
-    HTTP status and metadata endpoints. Assistant turns are transported through
+    HTTP status and metadata endpoints. Any endpoint can answer 500 with {"error": "internal_error"}
+    and no further detail. Assistant turns are transported through
     the WebSocket protocol documented in websocket.md.
 servers:
   - url: http://127.0.0.1:8000
@@ -142,6 +143,157 @@ paths:
                 required: [error]
                 properties:
                   error: { type: string }
+  /api/v1/investigations/events:
+    get:
+      operationId: searchInvestigationEvents
+      summary: Search imported events by time, area, magnitude, and source (demo)
+      description: >-
+        Read-only search over imported records. Every query is bounded: the time window defaults to the
+        last 7 days and may not exceed 90 days, radius searches are limited to 300 km, and pages hold at
+        most 200 events. Results are sorted by observedAt descending, then id ascending. Requests are
+        rate-limited per client.
+      parameters:
+        - { name: from, in: query, description: Inclusive start, ISO 8601 with offset. Defaults to 7 days before `to`., schema: { type: string, format: date-time } }
+        - { name: to, in: query, description: Inclusive end, ISO 8601 with offset. Defaults to now., schema: { type: string, format: date-time } }
+        - { name: bbox, in: query, description: 'minLon,minLat,maxLon,maxLat in WGS84. Cannot be combined with lat/lon/radiusKm.', schema: { type: string, maxLength: 100 } }
+        - { name: lat, in: query, description: Circle center latitude; requires lon and radiusKm., schema: { type: number, minimum: -90, maximum: 90 } }
+        - { name: lon, in: query, description: Circle center longitude; requires lat and radiusKm., schema: { type: number, minimum: -180, maximum: 180 } }
+        - { name: radiusKm, in: query, schema: { type: number, exclusiveMinimum: 0, maximum: 300 } }
+        - { name: minMagnitude, in: query, schema: { type: number, minimum: -3, maximum: 11 } }
+        - { name: maxMagnitude, in: query, schema: { type: number, minimum: -3, maximum: 11 } }
+        - { name: sourceIds, in: query, description: Comma-separated source IDs; at most 20 are used., schema: { type: string, maxLength: 500 } }
+        - { name: category, in: query, description: 'Exact category, for example seismic:earthquake.', schema: { type: string, maxLength: 120 } }
+        - { name: limit, in: query, schema: { type: integer, minimum: 1, maximum: 200, default: 50 } }
+        - { name: cursor, in: query, description: Opaque value from a previous nextCursor., schema: { type: string, maxLength: 300 } }
+      responses:
+        '200':
+          description: One page of events with the applied filters and source provenance.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/EventSearchResponse' }
+        '400':
+          description: >-
+            Invalid, conflicting, or unbounded parameters: invalid_query (malformed or unknown parameter),
+            invalid_time_window, invalid_radius_query (lat, lon, and radiusKm must be given together),
+            invalid_area_filter (bbox combined with a radius), invalid_bbox,
+            invalid_magnitude_range (minMagnitude greater than maxMagnitude), or invalid_cursor.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+              examples:
+                window: { value: { error: invalid_time_window } }
+                area: { value: { error: invalid_area_filter } }
+                magnitude: { value: { error: invalid_magnitude_range } }
+        '429':
+          description: Too many requests from this client; see Retry-After.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorResponse' }
+  /api/v1/investigations/events/{id}:
+    get:
+      operationId: getInvestigationEvent
+      summary: Read one event with nearby verified places, sources, and the last sync run
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string, maxLength: 120, pattern: '^[\w.:-]+$' } }
+      responses:
+        '200':
+          description: Event details.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/EventDetailsResponse' }
+        '400': { description: Invalid ID., content: { application/json: { schema: { $ref: '#/components/schemas/ErrorResponse' } } } }
+        '404': { description: Event not found., content: { application/json: { schema: { $ref: '#/components/schemas/ErrorResponse' } } } }
+  /api/v1/investigations/entities/{id}:
+    get:
+      operationId: getInvestigationEntity
+      summary: Read one place with the events linked to it
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string, maxLength: 120, pattern: '^[\w.:-]+$' } }
+        - { name: limit, in: query, schema: { type: integer, minimum: 1, maximum: 100, default: 20 } }
+      responses:
+        '200':
+          description: Place details and linked events, newest first.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/EntityDetailsResponse' }
+        '400': { description: Invalid ID or limit., content: { application/json: { schema: { $ref: '#/components/schemas/ErrorResponse' } } } }
+        '404': { description: Place not found., content: { application/json: { schema: { $ref: '#/components/schemas/ErrorResponse' } } } }
+  /api/v1/investigations/import/{sourceId}:
+    post:
+      operationId: startInvestigationImport
+      summary: Start a bounded import from an allowlisted event source (demo, disabled by default)
+      description: >-
+        Available only when INVESTIGATION_IMPORT_ENABLED=true. The demo has no authentication, so the
+        trigger is off by default; use `npm run data:import:events` instead. One import per source runs
+        at a time, and a cooldown applies between imports.
+      parameters:
+        - { name: sourceId, in: path, required: true, schema: { type: string, enum: [ingv-fdsn, demo-seismic-synthetic] } }
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              properties:
+                days: { type: integer, minimum: 1, maximum: 30, default: 7 }
+      responses:
+        '202':
+          description: Import started; poll GET /api/v1/data/sources for lastSync.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [runId, sourceId, status]
+                properties:
+                  runId: { type: string, format: uuid }
+                  sourceId: { type: string }
+                  status: { const: running }
+        '400': { description: Invalid request body or malformed JSON (invalid_json)., content: { application/json: { schema: { $ref: '#/components/schemas/ErrorResponse' } } } }
+        '415': { description: The body is not application/json; this also blocks cross-site form posts., content: { application/json: { schema: { $ref: '#/components/schemas/ErrorResponse' } } } }
+        '403': { description: The import trigger is disabled., content: { application/json: { schema: { $ref: '#/components/schemas/ErrorResponse' } } } }
+        '404': { description: Unknown source., content: { application/json: { schema: { $ref: '#/components/schemas/ErrorResponse' } } } }
+        '409': { description: An import for this source is already running., content: { application/json: { schema: { $ref: '#/components/schemas/ErrorResponse' } } } }
+        '429':
+          description: Cooldown or rate limit; see Retry-After.
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/ErrorResponse'
+                  - type: object
+                    properties:
+                      retryAfterSeconds: { type: integer, minimum: 1 }
+  /api/v1/investigations/query:
+    post:
+      operationId: queryInvestigationEvents
+      summary: Interpret a natural-language request and run the validated event search (demo)
+      description: >-
+        The local model may only call the allowlisted search_events function; its arguments are validated
+        and bounded, and place names are resolved to verified OpenStreetMap settlements on the server.
+        The model does not write the result rows. If the model is busy, unavailable, times out, or returns
+        an invalid call, a rule-based parser is used and interpretation.interpretedBy is "rules".
+        Results cover the last 7 days by default and return at most 50 events per page; continue with
+        GET /api/v1/investigations/events using appliedFilters and nextCursor.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/InvestigationQueryRequest' }
+      responses:
+        '200':
+          description: Interpretation, resolved place, applied filters, and one page of matching events.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/InvestigationQueryResponse' }
+        '400': { description: Invalid request body or malformed JSON (invalid_json)., content: { application/json: { schema: { $ref: '#/components/schemas/ErrorResponse' } } } }
+        '422':
+          description: The request could not be turned into a search, the place was not found, or a selection was required.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/InvestigationQueryError' }
+        '429': { description: Too many requests; see Retry-After., content: { application/json: { schema: { $ref: '#/components/schemas/ErrorResponse' } } } }
 components:
   schemas:
     HealthResponse:
@@ -206,6 +358,11 @@ components:
           format: uri
         license:
           type: [string, 'null']
+        lastSync:
+          description: Latest import run for sources fed by the event pipeline; null for snapshot sources.
+          oneOf:
+            - $ref: '#/components/schemas/SyncSummary'
+            - type: 'null'
     Place:
       type: object
       required: [id, sourceId, name, lat, lon, category, countryCode, city, street, houseNumber, postcode]
@@ -263,3 +420,210 @@ components:
                   - { type: number, minimum: -90, maximum: 90 }
                 minItems: 2
                 maxItems: 2
+    ErrorResponse:
+      type: object
+      required: [error]
+      properties:
+        error: { type: string }
+    SyncSummary:
+      type: object
+      required: [status, startedAt, finishedAt, fetchedCount, insertedCount, updatedCount, skippedCount, errorCode, lastSucceededAt]
+      properties:
+        status: { type: string, enum: [running, succeeded, failed] }
+        startedAt: { type: string, format: date-time }
+        finishedAt: { type: [string, 'null'], format: date-time }
+        fetchedCount: { type: integer, minimum: 0 }
+        insertedCount: { type: integer, minimum: 0 }
+        updatedCount: { type: integer, minimum: 0 }
+        skippedCount: { type: integer, minimum: 0 }
+        errorCode:
+          type: [string, 'null']
+          description: Stable code such as upstream_unavailable, upstream_timeout, upstream_malformed, stale_run, or window_truncated.
+        lastSucceededAt: { type: [string, 'null'], format: date-time }
+    InvestigationEvent:
+      type: object
+      required: [id, sourceId, observedAt, label, lat, lon, accuracyMeters, attributes]
+      properties:
+        id: { type: string, description: '"<sourceId>:<externalId>"' }
+        sourceId: { type: string }
+        observedAt: { type: string, format: date-time }
+        label: { type: string }
+        lat: { type: number, minimum: -90, maximum: 90 }
+        lon: { type: number, minimum: -180, maximum: 180 }
+        accuracyMeters: { type: [number, 'null'] }
+        distanceMeters:
+          type: integer
+          minimum: 0
+          description: Straight-line distance from the search center; present only for radius searches.
+        attributes:
+          type: object
+          description: Source-specific fields. Seismic events include category, magnitude, magnitudeType, depthKm, placeDescription, author, and sourceEventUrl.
+          additionalProperties: true
+    AppliedEventFilters:
+      type: object
+      required: [from, to, limit]
+      properties:
+        from: { type: string, format: date-time }
+        to: { type: string, format: date-time }
+        bbox:
+          type: array
+          items: { type: number }
+          minItems: 4
+          maxItems: 4
+        near:
+          type: object
+          required: [lat, lon, radiusKm]
+          properties:
+            lat: { type: number }
+            lon: { type: number }
+            radiusKm: { type: number }
+        minMagnitude: { type: number }
+        maxMagnitude: { type: number }
+        sourceIds: { type: array, items: { type: string } }
+        category: { type: string }
+        limit: { type: integer }
+    EventSearchResponse:
+      type: object
+      required: [total, events, nextCursor, appliedFilters, mapFeatures, sources]
+      properties:
+        total: { type: integer, minimum: 0, description: Matches for the filters across all pages. }
+        events:
+          type: array
+          items: { $ref: '#/components/schemas/InvestigationEvent' }
+        nextCursor: { type: [string, 'null'] }
+        appliedFilters: { $ref: '#/components/schemas/AppliedEventFilters' }
+        mapFeatures:
+          type: object
+          required: [type, features]
+          properties:
+            type: { const: FeatureCollection }
+            features: { type: array, items: { type: object } }
+        sources:
+          type: array
+          items: { $ref: '#/components/schemas/DataSource' }
+    LinkedPlace:
+      type: object
+      required: [relation, distanceMeters, place]
+      properties:
+        relation: { type: string, const: nearby }
+        distanceMeters: { type: integer, minimum: 0, description: Straight-line distance computed at import time. }
+        place: { $ref: '#/components/schemas/Place' }
+    EventDetailsResponse:
+      type: object
+      required: [event, linkedPlaces, sources, lastSync]
+      properties:
+        event: { $ref: '#/components/schemas/InvestigationEvent' }
+        linkedPlaces:
+          type: array
+          maxItems: 20
+          items: { $ref: '#/components/schemas/LinkedPlace' }
+        sources:
+          type: array
+          items: { $ref: '#/components/schemas/DataSource' }
+        lastSync:
+          oneOf:
+            - $ref: '#/components/schemas/SyncSummary'
+            - type: 'null'
+    LinkedEvent:
+      type: object
+      required: [relation, distanceMeters, event]
+      properties:
+        relation: { type: string, const: nearby }
+        distanceMeters: { type: integer, minimum: 0 }
+        event: { $ref: '#/components/schemas/InvestigationEvent' }
+    EntityDetailsResponse:
+      type: object
+      required: [place, linkedEvents, totalLinkedEvents, sources]
+      properties:
+        place: { $ref: '#/components/schemas/Place' }
+        linkedEvents:
+          type: array
+          items: { $ref: '#/components/schemas/LinkedEvent' }
+        totalLinkedEvents: { type: integer, minimum: 0 }
+        sources:
+          type: array
+          items: { $ref: '#/components/schemas/DataSource' }
+    InvestigationQueryRequest:
+      type: object
+      additionalProperties: false
+      required: [text]
+      properties:
+        text: { type: string, minLength: 1, maxLength: 300 }
+        language: { type: string, enum: [en, ru, de], default: en }
+        selection:
+          description: The currently selected map event, used for "here" or "this location".
+          oneOf:
+            - type: object
+              additionalProperties: false
+              required: [lat, lon, label]
+              properties:
+                lat: { type: number, minimum: -90, maximum: 90 }
+                lon: { type: number, minimum: -180, maximum: 180 }
+                label: { type: string, maxLength: 200 }
+            - type: 'null'
+    SearchEventsArguments:
+      type: object
+      additionalProperties: false
+      description: Validated arguments of the search_events tool.
+      properties:
+        place: { type: string, maxLength: 100 }
+        nearSelection: { type: boolean }
+        radiusKm: { type: number, exclusiveMinimum: 0, maximum: 300 }
+        hours: { type: integer, minimum: 1, maximum: 2160 }
+        minMagnitude: { type: number, minimum: -3, maximum: 11 }
+        maxMagnitude: { type: number, minimum: -3, maximum: 11 }
+    QueryInterpretation:
+      type: object
+      required: [interpretedBy, tool, arguments]
+      properties:
+        interpretedBy: { type: string, enum: [model, rules] }
+        tool: { type: string, const: search_events }
+        arguments: { $ref: '#/components/schemas/SearchEventsArguments' }
+        fallbackReason:
+          type: string
+          enum: [model_busy, model_unavailable, model_timeout, model_no_tool_call, model_rejected_tool, model_invalid_arguments, model_error]
+        rejectedTools:
+          type: array
+          description: Tool names the model requested that are not allowlisted; they were not executed.
+          items: { type: string }
+        ignoredPlace:
+          type: string
+          description: A country or region the model passed as place. It is not a settlement, so no radius was applied.
+    ResolvedPlace:
+      type: object
+      required: [match, id, sourceId, name, category, countryCode, lat, lon]
+      properties:
+        match:
+          type: string
+          enum: [exact, approximate]
+          description: approximate means no exact name matched and a city or town with a close spelling (same first three letters, edit distance ≤ 2) was used.
+        id: { type: string }
+        sourceId: { type: string }
+        name: { type: string }
+        category: { type: string }
+        countryCode: { type: [string, 'null'] }
+        lat: { type: number }
+        lon: { type: number }
+    InvestigationQueryResponse:
+      allOf:
+        - $ref: '#/components/schemas/EventSearchResponse'
+        - type: object
+          required: [interpretation, resolvedPlace]
+          properties:
+            interpretation: { $ref: '#/components/schemas/QueryInterpretation' }
+            resolvedPlace:
+              oneOf:
+                - $ref: '#/components/schemas/ResolvedPlace'
+                - type: 'null'
+    InvestigationQueryError:
+      type: object
+      required: [error, interpretation]
+      properties:
+        error: { type: string, enum: [query_not_understood, place_not_found, selection_required] }
+        interpretation:
+          oneOf:
+            - $ref: '#/components/schemas/QueryInterpretation'
+            - type: 'null'
+        fallbackReason:
+          type: string
+          enum: [model_busy, model_unavailable, model_timeout, model_no_tool_call, model_rejected_tool, model_invalid_arguments, model_error]

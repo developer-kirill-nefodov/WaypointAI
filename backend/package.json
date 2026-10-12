@@ -10,7 +10,9 @@
     "test": "node --import tsx --test test/*.test.js",
     "db:migrate": "sequelize-cli db:migrate --env development",
     "data:import:osm": "node --import tsx src/cli/import-osm.ts",
-    "typecheck": "tsc -p tsconfig.json --noEmit"
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "data:import:events": "node --import tsx src/cli/import-events.ts",
+    "test:db": "node --import tsx --test test/investigation-db.test.js"
   },
   "dependencies": {
     "@waypoint-ai/shared": "*",

@@ -3,6 +3,7 @@
  * Backend validates actual frames against that JSON Schema with Ajv.
  * Update both in the same change when the wire protocol changes.
  */
+import type { SyncSummary } from "./investigation.js";
 export type AssistantStatus = "ready" | "model_unavailable" | "data_unavailable" | "starting";
 export type ToolName = "search_records" | "get_record_details" | "search_places" | "list_sources";
 export type Language = "en" | "ru" | "de";
@@ -51,6 +52,8 @@ export interface SourceView {
   snapshotDate?: string | null;
   sourceUrl?: string | null;
   license?: string | null;
+  /** REST only: latest event import run; null for snapshot sources. */
+  lastSync?: SyncSummary | null;
 }
 
 export interface PlaceView {

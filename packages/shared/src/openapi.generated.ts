@@ -109,6 +109,100 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/investigations/events": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Search imported events by time, area, magnitude, and source (demo)
+         * @description Read-only search over imported records. Every query is bounded: the time window defaults to the last 7 days and may not exceed 90 days, radius searches are limited to 300 km, and pages hold at most 200 events. Results are sorted by observedAt descending, then id ascending. Requests are rate-limited per client.
+         */
+        get: operations["searchInvestigationEvents"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/investigations/events/{id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Read one event with nearby verified places, sources, and the last sync run */
+        get: operations["getInvestigationEvent"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/investigations/entities/{id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Read one place with the events linked to it */
+        get: operations["getInvestigationEntity"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/investigations/import/{sourceId}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Start a bounded import from an allowlisted event source (demo, disabled by default)
+         * @description Available only when INVESTIGATION_IMPORT_ENABLED=true. The demo has no authentication, so the trigger is off by default; use `npm run data:import:events` instead. One import per source runs at a time, and a cooldown applies between imports.
+         */
+        post: operations["startInvestigationImport"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/investigations/query": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Interpret a natural-language request and run the validated event search (demo)
+         * @description The local model may only call the allowlisted search_events function; its arguments are validated and bounded, and place names are resolved to verified OpenStreetMap settlements on the server. The model does not write the result rows. If the model is busy, unavailable, times out, or returns an invalid call, a rule-based parser is used and interpretation.interpretedBy is "rules". Results cover the last 7 days by default and return at most 50 events per page; continue with GET /api/v1/investigations/events using appliedFilters and nextCursor.
+         */
+        post: operations["queryInvestigationEvents"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
 }
 export type webhooks = Record<string, never>;
 export interface components {
@@ -154,6 +248,8 @@ export interface components {
             /** Format: uri */
             sourceUrl?: string | null;
             license?: string | null;
+            /** @description Latest import run for sources fed by the event pipeline; null for snapshot sources. */
+            lastSync?: components["schemas"]["SyncSummary"] | null;
         };
         Place: {
             id: string;
@@ -189,6 +285,158 @@ export interface components {
                     number
                 ][];
             };
+        };
+        ErrorResponse: {
+            error: string;
+        };
+        SyncSummary: {
+            /** @enum {string} */
+            status: "running" | "succeeded" | "failed";
+            /** Format: date-time */
+            startedAt: string;
+            /** Format: date-time */
+            finishedAt: string | null;
+            fetchedCount: number;
+            insertedCount: number;
+            updatedCount: number;
+            skippedCount: number;
+            /** @description Stable code such as upstream_unavailable, upstream_timeout, upstream_malformed, stale_run, or window_truncated. */
+            errorCode: string | null;
+            /** Format: date-time */
+            lastSucceededAt: string | null;
+        };
+        InvestigationEvent: {
+            /** @description "<sourceId>:<externalId>" */
+            id: string;
+            sourceId: string;
+            /** Format: date-time */
+            observedAt: string;
+            label: string;
+            lat: number;
+            lon: number;
+            accuracyMeters: number | null;
+            /** @description Straight-line distance from the search center; present only for radius searches. */
+            distanceMeters?: number;
+            /** @description Source-specific fields. Seismic events include category, magnitude, magnitudeType, depthKm, placeDescription, author, and sourceEventUrl. */
+            attributes: {
+                [key: string]: unknown;
+            };
+        };
+        AppliedEventFilters: {
+            /** Format: date-time */
+            from: string;
+            /** Format: date-time */
+            to: string;
+            bbox?: number[];
+            near?: {
+                lat: number;
+                lon: number;
+                radiusKm: number;
+            };
+            minMagnitude?: number;
+            maxMagnitude?: number;
+            sourceIds?: string[];
+            category?: string;
+            limit: number;
+        };
+        EventSearchResponse: {
+            /** @description Matches for the filters across all pages. */
+            total: number;
+            events: components["schemas"]["InvestigationEvent"][];
+            nextCursor: string | null;
+            appliedFilters: components["schemas"]["AppliedEventFilters"];
+            mapFeatures: {
+                /** @constant */
+                type: "FeatureCollection";
+                features: Record<string, never>[];
+            };
+            sources: components["schemas"]["DataSource"][];
+        };
+        LinkedPlace: {
+            /** @constant */
+            relation: "nearby";
+            /** @description Straight-line distance computed at import time. */
+            distanceMeters: number;
+            place: components["schemas"]["Place"];
+        };
+        EventDetailsResponse: {
+            event: components["schemas"]["InvestigationEvent"];
+            linkedPlaces: components["schemas"]["LinkedPlace"][];
+            sources: components["schemas"]["DataSource"][];
+            lastSync: components["schemas"]["SyncSummary"] | null;
+        };
+        LinkedEvent: {
+            /** @constant */
+            relation: "nearby";
+            distanceMeters: number;
+            event: components["schemas"]["InvestigationEvent"];
+        };
+        EntityDetailsResponse: {
+            place: components["schemas"]["Place"];
+            linkedEvents: components["schemas"]["LinkedEvent"][];
+            totalLinkedEvents: number;
+            sources: components["schemas"]["DataSource"][];
+        };
+        InvestigationQueryRequest: {
+            text: string;
+            /**
+             * @default en
+             * @enum {string}
+             */
+            language: "en" | "ru" | "de";
+            /** @description The currently selected map event, used for "here" or "this location". */
+            selection?: {
+                lat: number;
+                lon: number;
+                label: string;
+            } | null;
+        };
+        /** @description Validated arguments of the search_events tool. */
+        SearchEventsArguments: {
+            place?: string;
+            nearSelection?: boolean;
+            radiusKm?: number;
+            hours?: number;
+            minMagnitude?: number;
+            maxMagnitude?: number;
+        };
+        QueryInterpretation: {
+            /** @enum {string} */
+            interpretedBy: "model" | "rules";
+            /** @constant */
+            tool: "search_events";
+            arguments: components["schemas"]["SearchEventsArguments"];
+            /** @enum {string} */
+            fallbackReason?: "model_busy" | "model_unavailable" | "model_timeout" | "model_no_tool_call" | "model_rejected_tool" | "model_invalid_arguments" | "model_error";
+            /** @description Tool names the model requested that are not allowlisted; they were not executed. */
+            rejectedTools?: string[];
+            /** @description A country or region the model passed as place. It is not a settlement, so no radius was applied. */
+            ignoredPlace?: string;
+        };
+        ResolvedPlace: {
+            /**
+             * @description approximate means no exact name matched and a city or town with a close spelling (same first three letters, edit distance ≤ 2) was used.
+             * @enum {string}
+             */
+            match: "exact" | "approximate";
+            id: string;
+            sourceId: string;
+            name: string;
+            category: string;
+            countryCode: string | null;
+            lat: number;
+            lon: number;
+        };
+        InvestigationQueryResponse: components["schemas"]["EventSearchResponse"] & {
+            interpretation: components["schemas"]["QueryInterpretation"];
+            resolvedPlace: components["schemas"]["ResolvedPlace"] | null;
+        };
+        InvestigationQueryError: {
+            /** @enum {string} */
+            error: "query_not_understood" | "place_not_found" | "selection_required";
+            interpretation: components["schemas"]["QueryInterpretation"] | null;
+            /** @enum {string} */
+            fallbackReason?: "model_busy" | "model_unavailable" | "model_timeout" | "model_no_tool_call" | "model_rejected_tool" | "model_invalid_arguments" | "model_error";
         };
     };
     responses: never;
@@ -374,6 +622,289 @@ export interface operations {
                     "application/json": {
                         error: string;
                     };
+                };
+            };
+        };
+    };
+    searchInvestigationEvents: {
+        parameters: {
+            query?: {
+                /** @description Inclusive start */
+                from?: string;
+                /** @description Inclusive end */
+                to?: string;
+                /** @description minLon,minLat,maxLon,maxLat in WGS84. Cannot be combined with lat/lon/radiusKm. */
+                bbox?: string;
+                /** @description Circle center latitude; requires lon and radiusKm. */
+                lat?: number;
+                /** @description Circle center longitude; requires lat and radiusKm. */
+                lon?: number;
+                radiusKm?: number;
+                minMagnitude?: number;
+                maxMagnitude?: number;
+                /** @description Comma-separated source IDs; at most 20 are used. */
+                sourceIds?: string;
+                /** @description Exact category, for example seismic:earthquake. */
+                category?: string;
+                limit?: number;
+                /** @description Opaque value from a previous nextCursor. */
+                cursor?: string;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description One page of events with the applied filters and source provenance. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["EventSearchResponse"];
+                };
+            };
+            /** @description Invalid, conflicting, or unbounded parameters: invalid_query (malformed or unknown parameter), invalid_time_window, invalid_radius_query (lat, lon, and radiusKm must be given together), invalid_area_filter (bbox combined with a radius), invalid_bbox, invalid_magnitude_range (minMagnitude greater than maxMagnitude), or invalid_cursor. */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Too many requests from this client; see Retry-After. */
+            429: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
+    getInvestigationEvent: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Event details. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["EventDetailsResponse"];
+                };
+            };
+            /** @description Invalid ID. */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Event not found. */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
+    getInvestigationEntity: {
+        parameters: {
+            query?: {
+                limit?: number;
+            };
+            header?: never;
+            path: {
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Place details and linked events, newest first. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["EntityDetailsResponse"];
+                };
+            };
+            /** @description Invalid ID or limit. */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Place not found. */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
+    startInvestigationImport: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                sourceId: "ingv-fdsn" | "demo-seismic-synthetic";
+            };
+            cookie?: never;
+        };
+        requestBody?: {
+            content: {
+                "application/json": {
+                    /** @default 7 */
+                    days?: number;
+                };
+            };
+        };
+        responses: {
+            /** @description Import started; poll GET /api/v1/data/sources for lastSync. */
+            202: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        /** Format: uuid */
+                        runId: string;
+                        sourceId: string;
+                        /** @constant */
+                        status: "running";
+                    };
+                };
+            };
+            /** @description Invalid request body or malformed JSON (invalid_json). */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description The import trigger is disabled. */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Unknown source. */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description An import for this source is already running. */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description The body is not application/json; this also blocks cross-site form posts. */
+            415: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Cooldown or rate limit; see Retry-After. */
+            429: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"] & {
+                        retryAfterSeconds?: number;
+                    };
+                };
+            };
+        };
+    };
+    queryInvestigationEvents: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["InvestigationQueryRequest"];
+            };
+        };
+        responses: {
+            /** @description Interpretation, resolved place, applied filters, and one page of matching events. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["InvestigationQueryResponse"];
+                };
+            };
+            /** @description Invalid request body or malformed JSON (invalid_json). */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description The request could not be turned into a search, the place was not found, or a selection was required. */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["InvestigationQueryError"];
+                };
+            };
+            /** @description Too many requests; see Retry-After. */
+            429: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
                 };
             };
         };

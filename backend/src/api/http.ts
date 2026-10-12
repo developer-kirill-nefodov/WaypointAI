@@ -4,7 +4,9 @@ import { getSources, searchPlaces } from "../data/record.repository.js";
 import { listSources } from "../data/source.repository.js";
 import { clearConversationHistory } from "../data/conversation.repository.js";
 import { getCapabilities } from "../services/readiness.js";
+import { isValidBbox } from "../services/geometry.js";
 import { env } from "../config/env.js";
+import { toPointFeatureCollection } from "./geojson.js";
 
 export const apiRouter = Router();
 
@@ -87,27 +89,27 @@ apiRouter.get("/data/places", async (request, response, next) => {
   const parsed = querySchema.safeParse(request.query);
   if (!parsed.success) return response.status(400).json({ error: "invalid_query" });
   const bbox = parsed.data.bbox?.split(",").map(Number);
-  if (bbox && (bbox.length !== 4 || bbox.some((value) => !Number.isFinite(value)) || bbox[0]! >= bbox[2]! || bbox[1]! >= bbox[3]! || bbox[0]! < -180 || bbox[2]! > 180 || bbox[1]! < -90 || bbox[3]! > 90)) {
-    return response.status(400).json({ error: "invalid_bbox" });
-  }
+  if (bbox && !isValidBbox(bbox)) return response.status(400).json({ error: "invalid_bbox" });
   try {
     const result = await searchPlaces({
-      query: parsed.data.q, category: parsed.data.category, city: parsed.data.city,
+      query: parsed.data.q,
+      category: parsed.data.category,
+      city: parsed.data.city,
       sourceIds: parsed.data.sourceIds?.split(",").map((id) => id.trim()).filter(Boolean).slice(0, 20),
-      bbox: bbox as [number, number, number, number] | undefined,
+      bbox,
       limit: parsed.data.limit,
     });
     const sources = await getSources([...new Set(result.places.map((place) => place.sourceId))]);
     response.json({
       total: result.total,
       places: result.places,
-      mapFeatures: {
-        type: "FeatureCollection",
-        features: result.places.map((place) => ({
-          type: "Feature", geometry: { type: "Point", coordinates: [place.lon, place.lat] },
-          properties: { entityType: "place", id: place.id, sourceId: place.sourceId, label: place.name, category: place.category },
-        })),
-      },
+      mapFeatures: toPointFeatureCollection(result.places, (place) => ({
+        entityType: "place",
+        id: place.id,
+        sourceId: place.sourceId,
+        label: place.name,
+        category: place.category,
+      })),
       sources,
     });
   } catch (error) { next(error); }

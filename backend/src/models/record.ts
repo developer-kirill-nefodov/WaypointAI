@@ -11,6 +11,8 @@ export class RecordModel extends Model {
   declare category: string;
   declare attributes: Record<string, unknown>;
   declare placeId: string | null;
+  declare externalId: string | null;
+  declare sourceRevision: string | null;
 }
 
 export function initRecordModel(sequelize: Sequelize): void {
@@ -25,6 +27,8 @@ export function initRecordModel(sequelize: Sequelize): void {
       category: { type: DataTypes.STRING(120), allowNull: false },
       attributes: { type: DataTypes.JSONB, allowNull: false, defaultValue: {} },
       placeId: { type: DataTypes.STRING(120), allowNull: true, field: "place_id" },
+      externalId: { type: DataTypes.STRING(120), allowNull: true, field: "external_id" },
+      sourceRevision: { type: DataTypes.STRING(80), allowNull: true, field: "source_revision" },
     },
     { sequelize, tableName: "records", underscored: true, timestamps: true },
   );

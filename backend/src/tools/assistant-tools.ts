@@ -25,7 +25,7 @@ export const assistantToolDefinitions: ToolDefinition[] = [
     type: "function",
     function: {
       name: "search_records",
-      description: "Search records from configured local sources. Use for questions about records, categories, dates, or map points. Check source metadata and describe the source accurately.",
+      description: "Search records from configured local sources, including imported earthquake events (category seismic:earthquake). Use for questions about earthquakes, records, categories, dates, or map points. Check source metadata and describe the source accurately.",
       parameters: { type: "object", additionalProperties: false, properties: {
         query: { type: "string", description: "Short keyword or phrase to match record category and attributes." },
         category: { type: "string", description: "Exact record category, if requested." },
