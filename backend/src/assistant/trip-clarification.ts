@@ -1,3 +1,5 @@
+import { explicitTravelCountry, inferRecentTravelCountry } from "./travel-place-prefetch.js";
+
 type Language = "en" | "ru" | "de";
 
 export interface TripClarification {
@@ -7,23 +9,39 @@ export interface TripClarification {
 
 export interface ResolvedTripPreferences {
   airportCode: "WAW" | "WMI" | null;
-  totalDays: 1 | 2 | 3 | null;
+  totalDays: number | null;
   routeMode: "driving" | "none" | null;
   cityOnly: boolean;
 }
 
 const ITINERARY_WORD = /маршрут|план|программа|дней|день|itinerary|route|days?|schedule|reiseplan|tage?/i;
 const AIRPORT_WORD = /аэропорт|airport|flughafen|lotnisko/i;
-const ROUTE_WORD = /маршрут|route|дорог|поездк|trip|reise|fahrt/i;
+const ROUTE_WORD = /маршрут|route|дорог|поездк|(?<!\p{L})пут(?:ь|и|ём|ем)(?!\p{L})|проложи|directions|trip|reise|fahrt/iu;
+const MAX_TRIP_DAYS = 7;
+const DAY_WORD = String.raw`(?:день|дня|дней|дне|днями|днях|days?|tage?n?)`;
+const DAY_COUNT_WORDS: Array<[number, string]> = [
+  [1, "1|один|одна|одного|one|ein|eine|einen"],
+  [2, "2|два|двух|two|zwei"],
+  [3, "3|три|тр[её]х|three|drei"],
+  [4, "4|четыре|четыр[её]х|four|vier"],
+  [5, "5|пять|пяти|five|fünf"],
+  [6, "6|шесть|шести|six|sechs"],
+  [7, "7|семь|семи|seven|sieben"],
+];
+const DAY_COUNT_PATTERN = new RegExp(String.raw`(?<![\p{L}\d])(${DAY_COUNT_WORDS.map(([, words]) => words).join("|")})(?:-?[хx])?\s*[- ]?\s*${DAY_WORD}(?![\p{L}])`, "iu");
+const WEEK_PATTERN = /на\s+(?:одну\s+)?неделю|for\s+(?:a|one)\s+week\b|(?:a|one)[- ]week\b|eine\s+woche/i;
 const WARSAW_WORD = /warsaw|warszaw|warschau|варшав|mazovia|польск|poland|polska|polen/i;
 
 export function getTripClarification(currentMessage: string, recentUserMessages: string[], language: Language): TripClarification | null {
   const context = [...recentUserMessages.slice(-8), currentMessage].join("\n");
-  if (!ITINERARY_WORD.test(context) || !AIRPORT_WORD.test(context) || !WARSAW_WORD.test(context)) return null;
+  const warsawAirportTrip = ITINERARY_WORD.test(context) && AIRPORT_WORD.test(context) && WARSAW_WORD.test(context);
+  const destinationKnown = Boolean(explicitTravelCountry(currentMessage) ?? inferRecentTravelCountry(recentUserMessages));
+  const dayPlanRequested = ROUTE_WORD.test(currentMessage) || hasTripDuration(currentMessage);
+  if (!warsawAirportTrip && !(destinationKnown && dayPlanRequested)) return null;
   const cityOnly = isCityOnlyTrip([...recentUserMessages, currentMessage]);
 
   const airportCode = resolveAirportCode(context);
-  if (!airportCode && !cityOnly) {
+  if (warsawAirportTrip && !airportCode && !cityOnly) {
     return language === "ru" ? {
       message: "Какой аэропорт Варшавы использовать как начальную точку?",
       choices: [
@@ -45,7 +63,7 @@ export function getTripClarification(currentMessage: string, recentUserMessages:
     };
   }
 
-  if (hasContradictoryTripLength(context) && !hasResolvedTripLength(currentMessage) && !recentUserMessages.some(hasResolvedTripLength)) {
+  if (warsawAirportTrip && hasContradictoryTripLength(context) && !hasResolvedTripLength(currentMessage) && !recentUserMessages.some(hasResolvedTripLength)) {
     return language === "ru" ? {
       message: "Уточните общую длительность: два дня всего или день у аэропорта плюс ещё два дня в Варшаве?",
       choices: [
@@ -67,7 +85,7 @@ export function getTripClarification(currentMessage: string, recentUserMessages:
     };
   }
 
-  if (ROUTE_WORD.test(context) && !hasResolvedRouteMode(context)) {
+  if ((warsawAirportTrip ? ROUTE_WORD.test(context) : dayPlanRequested) && !hasResolvedRouteMode(context)) {
     return language === "ru" ? {
       message: "Сейчас приложение умеет строить только автомобильный маршрут. Подойдёт такой вариант?",
       choices: [
@@ -135,16 +153,19 @@ function hasResolvedTripLength(value: string): boolean {
   return /(?:(?:^|\s)[123]\s*(?:день|дня|дней|days?)\s*(?:всего|total)(?:\s|[:.,]|$)|(?:всего|total)\s*(?:[123]|один|одна|два|три|one|two|three)\s*(?:день|дня|дней|days?)(?:\s|$)|(?:оставить|оставь|keep|leave)\s+(?:только\s+)?(?:1|один|одна|one)\s*(?:день|day))/i.test(value) || removesSecondDay(value);
 }
 
-function hasTripDuration(value: string): boolean {
-  return /\b(?:1|2|3|one|two|three|ein|zwei|drei)\s*[- ]?\s*(?:days?|tage?)\b|(?:^|\s)(?:1|2|3|один|одна|дв(?:а|ух)|три)\s*[- ]?\s*(?:день|дня|дней|дне|днями|днях)/i.test(value)
-    || removesSecondDay(value);
+export function hasTripDuration(value: string): boolean {
+  return parseTripDuration(value) !== null;
 }
 
-function parseTripDuration(value: string): 1 | 2 | 3 {
+/** Returns the first stated trip length of 1–7 days; longer trips are not planned deterministically. */
+function parseTripDuration(value: string): number | null {
   if (removesSecondDay(value)) return 1;
-  if (/\b(?:3|three|drei)\s*[- ]?\s*(?:days?|tage?)\b|(?:^|\s)3\s*(?:день|дня|дней|дне|днями|днях)|(?:^|\s)три\s*(?:день|дня|дней|дне|днями|днях)/i.test(value)) return 3;
-  if (/\b(?:1|one|ein)\s*[- ]?\s*(?:days?|tage?)\b|(?:^|\s)(?:1|один|одна)\s*[- ]?\s*(?:день|дня|дней|дне|днями|днях)/i.test(value)) return 1;
-  return 2;
+  const match = DAY_COUNT_PATTERN.exec(value);
+  if (match) {
+    const word = match[1]!.toLowerCase();
+    return DAY_COUNT_WORDS.find(([, words]) => new RegExp(`^(?:${words})$`, "iu").test(word))?.[0] ?? null;
+  }
+  return WEEK_PATTERN.test(value) ? MAX_TRIP_DAYS : null;
 }
 
 function removesSecondDay(value: string): boolean {
@@ -153,4 +174,18 @@ function removesSecondDay(value: string): boolean {
 
 function hasResolvedRouteMode(value: string): boolean {
   return /(?:автомоб\w*|на\s+машин\w*|driving|by\s+car|auto(?:fahrt)?|mit\s+dem\s+auto|без\s+маршрут\w*|no\s+route|without\s+a\s+route|ohne\s+route|только\s+список\s+мест|places\s+without\s+a\s+route)/i.test(value);
+}
+
+/**
+ * True when the current message is about the itinerary itself (duration, route, airport, or a clarification answer).
+ * Other follow-ups in a trip conversation, such as "which sources are available?", must not rebuild the plan.
+ */
+export function isTripPlanningMessage(message: string): boolean {
+  return ROUTE_WORD.test(message)
+    || ITINERARY_WORD.test(message)
+    || hasTripDuration(message)
+    || hasResolvedRouteMode(message)
+    || resolveAirportCode(message) !== null
+    || isAirportOptOut(message)
+    || removesSecondDay(message);
 }

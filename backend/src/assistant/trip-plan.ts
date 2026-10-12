@@ -3,18 +3,21 @@ import type { TravelPlacePrefetch } from "./travel-place-prefetch.js";
 import type { ResolvedTripPreferences } from "./trip-clarification.js";
 
 export function buildTripPlan(prefetch: TravelPlacePrefetch | null, preferences: ResolvedTripPreferences): TripPlan | null {
-  if (!prefetch || !preferences.totalDays || !preferences.routeMode) return null;
+  if (!prefetch || !preferences.routeMode) return null;
   if (prefetch.airportUnavailable && !preferences.cityOnly) return null;
+  // An explicit route choice without a stated duration is treated as a one-day plan.
+  const totalDays = preferences.totalDays ?? 1;
   const airport = preferences.cityOnly ? null : prefetch.airport ?? null;
   const airportPlaces = uniquePlaces(prefetch.searches.filter((search) => search.area === "airport_radius").flatMap((search) => search.places));
-  const cityPlaces = uniquePlaces(prefetch.searches.filter((search) => search.area === "city").flatMap((search) => search.places));
+  const destinationArea = prefetch.searches.some((search) => search.area === "city") ? "city" : "country";
+  const cityPlaces = uniquePlaces(prefetch.searches.filter((search) => search.area === destinationArea).flatMap((search) => search.places));
   const cityStartDay = airport ? 2 : 1;
-  const cityDayCount = Math.max(1, preferences.totalDays - cityStartDay + 1);
+  const cityDayCount = Math.max(1, totalDays - cityStartDay + 1);
   const cityGroups = splitEvenly(cityPlaces, cityDayCount);
   const days: TripPlan["days"] = [];
   let cappedStops = false;
 
-  for (let day = 1; day <= preferences.totalDays; day += 1) {
+  for (let day = 1; day <= totalDays; day += 1) {
     const airportDay = Boolean(airport) && day === 1;
     const availablePlaces = airportDay ? airportPlaces : cityGroups[day - cityStartDay] ?? [];
     const selectedPlaces = availablePlaces.slice(0, airportDay ? 7 : 8);
@@ -41,10 +44,10 @@ export function buildTripPlan(prefetch: TravelPlacePrefetch | null, preferences:
   const sourceIds = [...new Set(stopsAndOrigin.map((place) => place.sourceId))];
   const hasTruncatedSearch = cappedStops || prefetch.searches.some((search) => search.partial);
   return {
-    status: supportedDays === preferences.totalDays && !hasTruncatedSearch ? "ready" : "partial",
+    status: supportedDays === totalDays && !hasTruncatedSearch ? "ready" : "partial",
     countryCode: prefetch.countryCode,
     city: prefetch.city,
-    totalDays: preferences.totalDays,
+    totalDays,
     supportedDays,
     travelMode: preferences.routeMode,
     airport: airport && preferences.airportCode ? {

@@ -1,6 +1,6 @@
 import type { PlaceView } from "@waypoint-ai/shared";
 import { searchNearbyPlaces, searchPlaces } from "../data/record.repository.js";
-import { isAirportOptOut, resolveAirportCode } from "./trip-clarification.js";
+import { isAirportOptOut, resolveAirportCode, resolveTripPreferences } from "./trip-clarification.js";
 
 type CategorySearch = { label: string; category: string; area: "airport_origin" | "airport_radius" | "city" | "country"; total: number; partial?: boolean; distancesMeters?: Record<string, number>; places: PlaceView[] };
 export type TravelPlacePrefetch = { countryCode: string; city: string; airport?: PlaceView; airportCode?: string; airportUnavailable?: boolean; airportRadiusMeters?: number; searches: CategorySearch[]; places: PlaceView[] };
@@ -91,6 +91,8 @@ const MUSEUM_WORD = /музе|museum/i;
 const ATTRACTION_WORD = /достопримеч|что посет|что посмотреть|sehenswürdig|attraction|sight|sightseeing/i;
 const ITINERARY_WORD = /маршрут|план|дней|день|itinerary|route|days?|reiseplan|tage?/i;
 const MAX_EXAMPLES_PER_CATEGORY = 4;
+const ITINERARY_STOPS_PER_DAY = 4;
+const MAX_ITINERARY_EXAMPLES_PER_CATEGORY = 14;
 const DEFAULT_AIRPORT_RADIUS_METERS = 5_000;
 
 /**
@@ -125,6 +127,11 @@ export async function prefetchTravelPlaces(message: string, sourceIds?: string[]
   const airportRequested = airportPreference !== false && /аэропорт|airport|flughafen|lotnisko/i.test(contextMessage);
   const airportCode = airportRequested ? resolveAirportCode(message) ?? (freshTrip ? null : [...recentUserMessages].reverse().map(resolveAirportCode).find(Boolean) ?? null) : null;
   const airportRadiusMeters = parseAirportRadiusMeters(contextMessage);
+  // Day plans split city examples across days, so fetch about four stops per day from the two sightseeing categories.
+  const tripDays = itineraryRequested ? resolveTripPreferences([...(freshTrip ? [] : recentUserMessages), message]).totalDays : null;
+  const destinationExamplesPerCategory = tripDays
+    ? Math.min(MAX_ITINERARY_EXAMPLES_PER_CATEGORY, Math.max(MAX_EXAMPLES_PER_CATEGORY, Math.ceil((tripDays * ITINERARY_STOPS_PER_DAY) / 2)))
+    : MAX_EXAMPLES_PER_CATEGORY;
   const categories: Array<{ label: string; category: string }> = [];
   if (cityRequested || (broadTravelRequest && !itineraryRequested && !cityFilter)) categories.push({ label: language === "ru" ? "города" : language === "de" ? "Städte" : "cities", category: "place:city" });
   if (foodRequested) categories.push({ label: language === "ru" ? "рестораны" : language === "de" ? "Restaurants" : "restaurants", category: "amenity:restaurant" });
@@ -153,7 +160,7 @@ export async function prefetchTravelPlaces(message: string, sourceIds?: string[]
     const examples = result.places
       .filter((place) => /\p{L}/u.test(place.name))
       .sort((a, b) => placeExampleScore(b) - placeExampleScore(a))
-      .slice(0, MAX_EXAMPLES_PER_CATEGORY);
+      .slice(0, nearbyResult || category === "amenity:restaurant" ? MAX_EXAMPLES_PER_CATEGORY : destinationExamplesPerCategory);
     searches.push({
       label: nearAirport
         ? `${label} ${language === "ru" ? "в радиусе" : language === "de" ? "im Umkreis von" : "within"} ${airportRadiusMeters / 1000} km ${language === "ru" ? "от аэропорта" : language === "de" ? "vom Flughafen" : "of the airport"}`
@@ -171,7 +178,7 @@ export async function prefetchTravelPlaces(message: string, sourceIds?: string[]
       const cityExamples = cityResult.places
         .filter((place) => /\p{L}/u.test(place.name))
         .sort((a, b) => placeExampleScore(b) - placeExampleScore(a))
-        .slice(0, MAX_EXAMPLES_PER_CATEGORY);
+        .slice(0, destinationExamplesPerCategory);
       searches.push({
         label: `${label} ${language === "ru" ? "в городе" : "in"} ${cityFilter}`,
         category,

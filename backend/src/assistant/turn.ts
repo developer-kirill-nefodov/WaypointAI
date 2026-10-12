@@ -5,14 +5,14 @@ import { ALLOWED_TOOLS } from "../tools/allowlist.js";
 import { assistantToolDefinitions, executeAssistantTool } from "../tools/assistant-tools.js";
 import { chat, OllamaUnavailableError, type ChatMessage } from "../llm/ollama.provider.js";
 import { env } from "../config/env.js";
+import { releaseInference, tryAcquireInference } from "../llm/inference-gate.js";
 import { explicitTravelCountry, formatTravelPlacePrefetch, inferRecentTravelCountry, isFreshTravelContext, prefetchTravelPlaces, recentTravelContextMessages, type TravelPlacePrefetch } from "./travel-place-prefetch.js";
-import { getTripClarification, resolveTripPreferences } from "./trip-clarification.js";
+import { getTripClarification, isTripPlanningMessage, resolveTripPreferences } from "./trip-clarification.js";
 import { buildTripPlan } from "./trip-plan.js";
 import type { TripPlan } from "@waypoint-ai/shared";
 import { SYSTEM_PROMPT } from "./prompts/system-prompt.js";
 import { text, toolLabel } from "./copy.js";
 import { formatTripPlanMessage } from "./trip-plan-message.js";
-let modelBusy = false;
 
 export async function processTurn(
   frame: Extract<ClientFrame, { type: "turn.submit" }>, conversationId: string, signal: AbortSignal,
@@ -27,11 +27,10 @@ export async function processTurn(
     emit({ protocolVersion: 1, type: "turn.error", requestId: frame.requestId, code: "invalid_message", message: text(language, "Начало периода должно быть раньше его окончания.", "The start date must be before the end date."), retryable: false });
     return;
   }
-  if (modelBusy) {
+  if (!tryAcquireInference()) {
     emit({ protocolVersion: 1, type: "turn.error", requestId: frame.requestId, code: "busy", message: text(language, "Помощник уже обрабатывает другой запрос. Попробуйте чуть позже.", "The assistant is already handling another request. Please try again shortly."), retryable: true });
     return;
   }
-  modelBusy = true;
   const turnStartedAt = performance.now();
   let turnOutcome: "completed" | "cancelled" | "error" = "error";
   let databaseDurationMs = 0;
@@ -163,7 +162,10 @@ export async function processTurn(
       });
       return;
     }
-    tripPlan = buildTripPlan(travelPrefetch, resolveTripPreferences([...relevantUserMessages, frame.message]));
+    // Preferences come from the whole trip history, so only rebuild the plan when this turn is about the trip.
+    tripPlan = isTripPlanningMessage(frame.message)
+      ? buildTripPlan(travelPrefetch, resolveTripPreferences([...relevantUserMessages, frame.message]))
+      : null;
     if (tripPlan) {
       const message = formatTripPlanMessage(tripPlan, placesFound, language);
       emit({ protocolVersion: 1, type: "turn.status", requestId: frame.requestId, phase: "composing", label: text(language, "Собираю план из проверенных точек", "Building a plan from verified places") });
@@ -264,7 +266,7 @@ export async function processTurn(
     const sourceIds = [...new Set(found.map((record) => record.sourceId))];
     const allSourceIds = [...new Set([...sourceIds, ...placesFound.map((place) => place.sourceId), ...listedSourceIds])];
     const sources = await getSources(allSourceIds);
-    messages.push({ role: "assistant", content: finalText });
+    // The final model reply is already in `messages` from the loop; pushing it again stored every answer twice.
     await saveConversationTurn(conversationId, workspaceId, messages);
     turnOutcome = "completed";
     emit({ protocolVersion: 1, type: "assistant.delta", requestId: frame.requestId, text: finalText });
@@ -311,7 +313,7 @@ export async function processTurn(
       generatedTokenCount,
       prefetchPlaceCount,
     });
-    modelBusy = false;
+    releaseInference();
   }
 }
 
