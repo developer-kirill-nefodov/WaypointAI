@@ -11,6 +11,13 @@ This is the canonical description of assistant messages. `contracts/openapi.yaml
 - All messages are UTF-8 JSON text frames with `protocolVersion: 1` and `type` fields.
 - Each turn is associated through `requestId`; server event IDs are ordered only within a connection and are not persistent.
 
+### Lifecycle, heartbeat, and reconnection
+
+- The server pings every client every 25 seconds and terminates a client that did not answer the previous ping (half-open connections). Browsers answer pings automatically.
+- On shutdown or restart the server closes every socket with code `1012` (Service Restart) and reason `Server restarting` before the process exits. `1001` (Going Away) is reserved for the same purpose.
+- Clients reconnect automatically: they check `GET /api/v1/healthz` first, then open a new socket and send `session.start` again. Backoff is exponential with jitter, capped at 15 seconds; after `1012` the first check waits about 1.2 seconds. Constants live in `packages/shared/src/reconnect.ts`.
+- A turn that was in progress when the socket closed has no terminal event. Clients must report it as interrupted and must not resend it automatically. Conversation context continues through the existing `conversationId`.
+
 ## Client → server
 
 ### `session.start`

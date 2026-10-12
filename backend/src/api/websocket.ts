@@ -7,6 +7,7 @@ import { hasConversation } from "../data/conversation.repository.js";
 import { env } from "../config/env.js";
 import { ActiveTurnGate } from "./active-turn.js";
 import { isAllowedOrigin } from "./origin.js";
+import { closeAllClients, startHeartbeat } from "./websocket-lifecycle.js";
 import { getCapabilities } from "../services/readiness.js";
 import { validateClientFrame } from "../schemas/websocket.js";
 import { isVoiceInputConfigured } from "../config/voice.js";
@@ -15,8 +16,10 @@ import { isVoiceFrame, VoiceSessionManager } from "../voice/voice-session.js";
 
 const VOICE_FINISH_TIMEOUT_MS = 10_000;
 
-export function attachWebSocket(server: Server): void {
+/** Attaches the assistant WebSocket; returns a function that closes every client, for graceful shutdown. */
+export function attachWebSocket(server: Server): (code: number, reason: string) => Promise<void> {
   const websocketServer = new WebSocketServer({ noServer: true, maxPayload: 16 * 1024 });
+  const stopHeartbeat = startHeartbeat(websocketServer);
   server.on("upgrade", (request, socket, head) => {
     const url = new URL(request.url ?? "/", `http://${request.headers.host ?? "127.0.0.1"}`);
     if (url.pathname !== "/api/v1/assistant/ws" || !isAllowedOrigin(request.headers.origin, env.FRONTEND_ORIGIN, env.NODE_ENV)) {
@@ -114,6 +117,11 @@ export function attachWebSocket(server: Server): void {
       voice.dispose();
     });
   });
+
+  return (code, reason) => {
+    stopHeartbeat();
+    return closeAllClients(websocketServer, code, reason);
+  };
 }
 
 function getRequestId(value: unknown): string {

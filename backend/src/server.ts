@@ -4,6 +4,7 @@ import { createServer } from "node:http";
 import { env } from "./config/env.js";
 import { database } from "./database/client.js";
 import { apiRouter } from "./api/http.js";
+import { WS_CLOSE_SERVICE_RESTART } from "@waypoint-ai/shared";
 import { attachWebSocket } from "./api/websocket.js";
 import { errorHandler } from "./api/error-handler.js";
 import { createInvestigationsRouter } from "./api/investigations.js";
@@ -48,7 +49,7 @@ app.use((_request, response) => response.status(404).json({ error: "not_found" }
 app.use(errorHandler);
 
 const server = createServer(app);
-attachWebSocket(server);
+const closeWebSockets = attachWebSocket(server);
 server.listen(env.API_PORT, env.API_HOST, () => {
   console.log(`Waypoint AI API listening on http://${env.API_HOST}:${env.API_PORT}`);
   void database.authenticate()
@@ -58,6 +59,8 @@ server.listen(env.API_PORT, env.API_HOST, () => {
 });
 
 async function shutdown(): Promise<void> {
+  // Close WebSockets with "service restart" first: clients reconnect promptly and proxies see a clean close.
+  await closeWebSockets(WS_CLOSE_SERVICE_RESTART, "Server restarting");
   server.close();
   await database.close();
   process.exit(0);
