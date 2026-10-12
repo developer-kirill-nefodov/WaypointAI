@@ -26,7 +26,20 @@ The install and model download require network access. Inference is local after 
 | `OLLAMA_NUM_PREDICT` | `768` | 128–2048 generated tokens |
 | `OLLAMA_NUM_BATCH` | `256` | 1–2048 |
 | `OLLAMA_TEMPERATURE` | `0.2` | 0–2 |
-| `OLLAMA_KEEP_ALIVE` | `60s` | Ollama idle retention duration |
+| `OLLAMA_KEEP_ALIVE` | `60s` | Ollama idle retention duration. A longer value such as `30m` keeps the model and its prompt cache loaded between turns. |
+| `OLLAMA_VULKAN` | `0` | Read by `npm run model:serve`. `1` enables Vulkan GPU offload |
+| `OLLAMA_IGPU_ENABLE` | `0` | Read by `npm run model:serve`. `1` allows integrated GPUs (for example Intel Arc); Ollama otherwise skips them |
+
+### GPU offload on integrated graphics
+
+Without a supported discrete GPU, Ollama runs the model on the CPU. Prompt processing then dominates turn latency, because each turn sends the system prompt, tool schemas, and conversation history. On an Intel Core Ultra 7 155H with Arc graphics, a 2,326-token prompt with `qwen3:4b-instruct-2507-q4_K_M` measured:
+
+| Mode | Prompt processing | Generation |
+|---|---|---|
+| CPU | 43 tokens/s (54 s) | ~9 tokens/s |
+| Vulkan iGPU (`OLLAMA_VULKAN=1`, `OLLAMA_IGPU_ENABLE=1`) | 151 tokens/s (15 s) | ~9 tokens/s |
+
+Measure on your own hardware before you enable it. Restart `npm run model:serve` after changing these flags, and confirm with `ollama ps` that `PROCESSOR` shows `GPU`. The Vulkan backend requires a system Vulkan driver (Mesa `intel_icd` for Intel).
 
 Do not start the model server or download weights automatically as part of application startup. Keep model files and credentials out of Git.
 
