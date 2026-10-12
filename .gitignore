@@ -14,3 +14,6 @@ data/local/
 /private/
 *.mp4
 *.mov
+
+# IDE project files
+.idea/
