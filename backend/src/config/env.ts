@@ -1,6 +1,12 @@
-import "dotenv/config";
+import { config as loadDotenv } from "dotenv";
+import { fileURLToPath } from "node:url";
 import { z } from "zod";
 import { modelEnvironmentSchema } from "./model.js";
+import { voiceEnvironmentSchema } from "./voice.js";
+
+// Load the repository-root .env regardless of the working directory; workspace scripts run from backend/.
+// Resolves to the root from both src/config/ and dist/config/.
+loadDotenv({ path: fileURLToPath(new URL("../../../.env", import.meta.url)) });
 
 const envSchema = z.object({
   NODE_ENV: z.enum(["development", "test", "production"]).default("development"),
@@ -10,6 +16,6 @@ const envSchema = z.object({
   DATABASE_URL: z.string().default("postgres://waypoint:waypoint_dev@127.0.0.1:5433/waypoint"),
   ROUTING_BASE_URL: z.string().url().default("https://router.project-osrm.org"),
   DEMO_MODE: z.preprocess((value) => value === undefined ? "true" : value, z.enum(["true", "false"]).transform((value) => value === "true")),
-}).merge(modelEnvironmentSchema);
+}).merge(modelEnvironmentSchema).merge(voiceEnvironmentSchema);
 
 export const env = envSchema.parse(process.env);

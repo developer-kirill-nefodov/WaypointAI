@@ -138,6 +138,8 @@ export interface components {
              */
             supportedFilters: string[];
             demoMode: boolean;
+            /** @description Demo, opt-in. True when the backend is configured to relay microphone audio to the external OpenAI Realtime transcription service over the assistant WebSocket. */
+            voiceInput?: boolean;
         };
         DataSource: {
             id: string;

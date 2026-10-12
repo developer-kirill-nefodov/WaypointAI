@@ -177,6 +177,11 @@ components:
           examples: [[dateRange, sourceIds, polygonIds, category]]
         demoMode:
           type: boolean
+        voiceInput:
+          type: boolean
+          description: >-
+            Demo, opt-in. True when the backend is configured to relay microphone audio
+            to the external OpenAI Realtime transcription service over the assistant WebSocket.
     DataSource:
       type: object
       required: [id, label, mode, status]

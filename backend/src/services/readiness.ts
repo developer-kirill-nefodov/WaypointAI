@@ -1,5 +1,6 @@
 import { database } from "../database/client.js";
 import { env } from "../config/env.js";
+import { isVoiceInputConfigured } from "../config/voice.js";
 import type { AssistantStatus } from "@waypoint-ai/shared";
 import { isConfiguredModelAvailable } from "../llm/ollama.provider.js";
 
@@ -25,5 +26,6 @@ export async function getCapabilities() {
     modelLabel: env.OLLAMA_MODEL,
     supportedFilters: ["dateRange", "sourceIds", "category"],
     demoMode: env.DEMO_MODE,
+    voiceInput: isVoiceInputConfigured(env),
   };
 }

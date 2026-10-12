@@ -6,14 +6,20 @@ import { processTurn } from "../assistant/turn.js";
 import { hasConversation } from "../data/conversation.repository.js";
 import { env } from "../config/env.js";
 import { ActiveTurnGate } from "./active-turn.js";
+import { isAllowedOrigin } from "./origin.js";
 import { getCapabilities } from "../services/readiness.js";
 import { validateClientFrame } from "../schemas/websocket.js";
+import { isVoiceInputConfigured } from "../config/voice.js";
+import { openRealtimeTranscription } from "../voice/openai-realtime.provider.js";
+import { isVoiceFrame, VoiceSessionManager } from "../voice/voice-session.js";
+
+const VOICE_FINISH_TIMEOUT_MS = 10_000;
 
 export function attachWebSocket(server: Server): void {
   const websocketServer = new WebSocketServer({ noServer: true, maxPayload: 16 * 1024 });
   server.on("upgrade", (request, socket, head) => {
     const url = new URL(request.url ?? "/", `http://${request.headers.host ?? "127.0.0.1"}`);
-    if (url.pathname !== "/api/v1/assistant/ws" || request.headers.origin !== env.FRONTEND_ORIGIN) {
+    if (url.pathname !== "/api/v1/assistant/ws" || !isAllowedOrigin(request.headers.origin, env.FRONTEND_ORIGIN, env.NODE_ENV)) {
       socket.write("HTTP/1.1 403 Forbidden\r\n\r\n");
       socket.destroy();
       return;
@@ -23,6 +29,15 @@ export function attachWebSocket(server: Server): void {
 
   websocketServer.on("connection", (websocket: WebSocket) => {
     const activeTurn = new ActiveTurnGate();
+    const voice = new VoiceSessionManager(
+      {
+        enabled: isVoiceInputConfigured(env),
+        maxSessionMs: env.VOICE_MAX_SESSION_SECONDS * 1000,
+        finishTimeoutMs: VOICE_FINISH_TIMEOUT_MS,
+      },
+      openRealtimeTranscription,
+      (event) => send(websocket, event),
+    );
     websocket.on("message", async (raw) => {
       let frame: unknown;
       try { frame = JSON.parse(raw.toString()); } catch {
@@ -36,7 +51,9 @@ export function attachWebSocket(server: Server): void {
       }
 
       const clientFrame = frame as ClientFrame;
-      if (clientFrame.type === "session.start") {
+      if (isVoiceFrame(clientFrame)) {
+        voice.handle(clientFrame);
+      } else if (clientFrame.type === "session.start") {
         const capabilities = await getCapabilities();
         send(websocket, {
           protocolVersion: 1,
@@ -47,6 +64,7 @@ export function attachWebSocket(server: Server): void {
           modelLabel: capabilities.modelLabel,
           demoMode: capabilities.demoMode,
           supportedFilters: capabilities.supportedFilters,
+          voiceInput: capabilities.voiceInput,
         });
       } else if (clientFrame.type === "turn.cancel") {
         const currentTurn = activeTurn.current;
@@ -87,8 +105,14 @@ export function attachWebSocket(server: Server): void {
         }
       }
     });
-    websocket.on("close", () => activeTurn.current?.controller.abort());
-    websocket.on("error", () => activeTurn.current?.controller.abort());
+    websocket.on("close", () => {
+      activeTurn.current?.controller.abort();
+      voice.dispose();
+    });
+    websocket.on("error", () => {
+      activeTurn.current?.controller.abort();
+      voice.dispose();
+    });
   });
 }
 

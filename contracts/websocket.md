@@ -6,7 +6,7 @@ This is the canonical description of assistant messages. `contracts/openapi.yaml
 
 - Local URL: `ws://127.0.0.1:8000/api/v1/assistant/ws`.
 - Production URL: `wss://<same-origin>/api/v1/assistant/ws`.
-- The backend validates `Origin` and uses the same authentication/authorization as the HTTP API.
+- The backend validates `Origin` against `FRONTEND_ORIGIN` and uses the same authentication/authorization as the HTTP API. Production requires an exact match. In `development`, the `localhost`, `127.0.0.1`, and `[::1]` aliases of a loopback `FRONTEND_ORIGIN` with the same scheme and port are also accepted.
 - Never put messages, IDs, tokens, or personal fields in a query string.
 - All messages are UTF-8 JSON text frames with `protocolVersion: 1` and `type` fields.
 - Each turn is associated through `requestId`; server event IDs are ordered only within a connection and are not persistent.
@@ -82,9 +82,12 @@ Cancellation is best-effort; the backend should not leave generation or tool wor
   "assistantStatus": "ready",
   "modelLabel": "Qwen3 4B (local)",
   "demoMode": true,
-  "supportedFilters": ["dateRange", "sourceIds", "polygonIds", "category"]
+  "supportedFilters": ["dateRange", "sourceIds", "polygonIds", "category"],
+  "voiceInput": false
 }
 ```
+
+Optional `voiceInput` is `true` only when the backend has voice input enabled and configured. See [Voice input](#voice-input-demo-opt-in).
 
 ### `turn.accepted`
 
@@ -236,6 +239,69 @@ The assistant's allowed read-only tools are `search_records`, `get_record_detail
 ```
 
 Error `code` allowlist: `invalid_message`, `unauthorized`, `forbidden`, `busy`, `model_unavailable`, `source_unavailable`, `timeout`, `internal_error`. Never send traceback, filesystem path, SQL, or upstream raw response.
+
+## Voice input (demo, opt-in)
+
+Status: **demo**. Voice input is disabled unless the administrator sets `VOICE_INPUT_ENABLED=true` and `OPENAI_API_KEY` on the backend. While it is active, the backend relays microphone audio to the external OpenAI Realtime transcription service. The browser never connects to OpenAI and never receives the API key. The UI must state that audio leaves the local machine while recording.
+
+Voice frames share the assistant connection but are independent of turns. A transcript is never submitted automatically; the UI places it in the composer, and the user sends it with a regular `turn.submit`.
+
+### Client → server
+
+```json
+{ "protocolVersion": 1, "type": "voice.start", "requestId": "voice-001", "language": "en" }
+```
+
+```json
+{ "protocolVersion": 1, "type": "voice.audio", "requestId": "voice-001", "audio": "<base64 PCM16>" }
+```
+
+```json
+{ "protocolVersion": 1, "type": "voice.stop", "requestId": "voice-001" }
+```
+
+- `language` is optional (`"en"`, `"ru"`, or `"de"`) and is passed to the transcription model as a hint.
+- `audio` is base64 of raw 16-bit little-endian PCM, mono, 24 kHz. Send chunks of about 100 ms. One chunk is at most 12,000 base64 characters so the frame stays below the 16 KiB WebSocket payload limit.
+- Only one voice session may be active per connection. A session ends after `voice.stop`, a provider error, the backend's maximum duration (`VOICE_MAX_SESSION_SECONDS`, default 120), or disconnection.
+- `voice.audio` and `voice.stop` frames for a request ID that is not active are ignored.
+
+### Server → client
+
+```json
+{ "protocolVersion": 1, "type": "voice.ready", "requestId": "voice-001" }
+```
+
+```json
+{ "protocolVersion": 1, "type": "voice.transcript.delta", "requestId": "voice-001", "text": "Show museums" }
+```
+
+```json
+{ "protocolVersion": 1, "type": "voice.transcript.completed", "requestId": "voice-001", "text": "Show museums in Berlin" }
+```
+
+```json
+{ "protocolVersion": 1, "type": "voice.stopped", "requestId": "voice-001" }
+```
+
+```json
+{
+  "protocolVersion": 1,
+  "type": "voice.error",
+  "requestId": "voice-001",
+  "code": "provider_unavailable",
+  "message": "Speech recognition is temporarily unavailable.",
+  "retryable": true
+}
+```
+
+- `voice.ready` means the backend reached the transcription provider. The client may send `voice.audio` after it arrives; earlier audio is ignored.
+- `voice.transcript.delta` carries newly recognized text that is appended to the previous deltas for the same request.
+- `voice.transcript.completed` carries the final text for the committed audio and replaces the accumulated deltas.
+- `voice.stopped` and `voice.error` are terminal for a voice session.
+- Error `code` allowlist: `voice_disabled`, `invalid_message`, `busy`, `provider_unavailable`, `timeout`, `internal_error`. Never forward the provider's raw error text, credentials, or internal addresses.
+- The backend does not store or log audio or transcript text.
+
+Voice lifecycle: `voice.start` → `voice.ready` → zero or more `voice.transcript.delta` → `voice.stop` → `voice.transcript.completed` (when speech was recognized) → `voice.stopped`. `voice.error` can replace any step after `voice.start`.
 
 ## Turn lifecycle
 

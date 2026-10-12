@@ -68,6 +68,31 @@
             { "$ref": "#/$defs/base" },
             { "type": "object", "required": ["requestId"], "properties": { "type": { "const": "turn.cancel" } } }
           ]
+        },
+        {
+          "allOf": [
+            { "$ref": "#/$defs/base" },
+            { "type": "object", "required": ["requestId"], "properties": { "type": { "const": "voice.start" }, "language": { "type": "string", "enum": ["en", "ru", "de"] } } }
+          ]
+        },
+        {
+          "allOf": [
+            { "$ref": "#/$defs/base" },
+            {
+              "type": "object",
+              "required": ["requestId", "audio"],
+              "properties": {
+                "type": { "const": "voice.audio" },
+                "audio": { "type": "string", "minLength": 4, "maxLength": 12000, "pattern": "^[A-Za-z0-9+/]+={0,2}$" }
+              }
+            }
+          ]
+        },
+        {
+          "allOf": [
+            { "$ref": "#/$defs/base" },
+            { "type": "object", "required": ["requestId"], "properties": { "type": { "const": "voice.stop" } } }
+          ]
         }
       ]
     },
@@ -85,7 +110,8 @@
                 "assistantStatus": { "enum": ["ready", "model_unavailable", "data_unavailable", "starting"] },
                 "modelLabel": { "type": ["string", "null"] },
                 "demoMode": { "type": "boolean" },
-                "supportedFilters": { "type": "array", "items": { "type": "string" } }
+                "supportedFilters": { "type": "array", "items": { "type": "string" } },
+                "voiceInput": { "type": "boolean" }
               }
             }
           ]
@@ -178,6 +204,45 @@
               "properties": {
                 "type": { "const": "turn.error" },
                 "code": { "enum": ["invalid_message", "unauthorized", "forbidden", "busy", "model_unavailable", "source_unavailable", "timeout", "internal_error"] },
+                "message": { "type": "string", "maxLength": 240 },
+                "retryable": { "type": "boolean" }
+              }
+            }
+          ]
+        },
+        {
+          "allOf": [
+            { "$ref": "#/$defs/base" },
+            { "type": "object", "required": ["requestId"], "properties": { "type": { "const": "voice.ready" } } }
+          ]
+        },
+        {
+          "allOf": [
+            { "$ref": "#/$defs/base" },
+            { "type": "object", "required": ["requestId", "text"], "properties": { "type": { "const": "voice.transcript.delta" }, "text": { "type": "string", "maxLength": 4000 } } }
+          ]
+        },
+        {
+          "allOf": [
+            { "$ref": "#/$defs/base" },
+            { "type": "object", "required": ["requestId", "text"], "properties": { "type": { "const": "voice.transcript.completed" }, "text": { "type": "string", "maxLength": 4000 } } }
+          ]
+        },
+        {
+          "allOf": [
+            { "$ref": "#/$defs/base" },
+            { "type": "object", "required": ["requestId"], "properties": { "type": { "const": "voice.stopped" } } }
+          ]
+        },
+        {
+          "allOf": [
+            { "$ref": "#/$defs/base" },
+            {
+              "type": "object",
+              "required": ["requestId", "code", "message", "retryable"],
+              "properties": {
+                "type": { "const": "voice.error" },
+                "code": { "enum": ["voice_disabled", "invalid_message", "busy", "provider_unavailable", "timeout", "internal_error"] },
                 "message": { "type": "string", "maxLength": 240 },
                 "retryable": { "type": "boolean" }
               }

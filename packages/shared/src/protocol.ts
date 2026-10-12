@@ -5,6 +5,8 @@
  */
 export type AssistantStatus = "ready" | "model_unavailable" | "data_unavailable" | "starting";
 export type ToolName = "search_records" | "get_record_details" | "search_places" | "list_sources";
+export type Language = "en" | "ru" | "de";
+export type VoiceErrorCode = "voice_disabled" | "invalid_message" | "busy" | "provider_unavailable" | "timeout" | "internal_error";
 
 export interface Scope {
   workspaceId?: string;
@@ -13,7 +15,7 @@ export interface Scope {
   sourceIds?: string[];
   filters?: Record<string, unknown>;
   selectedMapItem?: { type: "place" | "record"; id: string };
-  language?: "en" | "ru" | "de";
+  language?: Language;
 }
 
 export interface ClientBase {
@@ -24,7 +26,10 @@ export interface ClientBase {
 export type ClientFrame =
   | (ClientBase & { type: "session.start" })
   | (ClientBase & { type: "turn.submit"; conversationId: string | null; message: string; scope: Scope })
-  | (ClientBase & { type: "turn.cancel" });
+  | (ClientBase & { type: "turn.cancel" })
+  | (ClientBase & { type: "voice.start"; language?: Language })
+  | (ClientBase & { type: "voice.audio"; audio: string })
+  | (ClientBase & { type: "voice.stop" });
 
 export interface RecordView {
   id: string;
@@ -82,7 +87,7 @@ export interface TripPlan {
 }
 
 export type ServerFrame =
-  | (ClientBase & { type: "session.ready"; connectionId: string; assistantStatus: AssistantStatus; modelLabel: string | null; demoMode: boolean; supportedFilters: string[] })
+  | (ClientBase & { type: "session.ready"; connectionId: string; assistantStatus: AssistantStatus; modelLabel: string | null; demoMode: boolean; supportedFilters: string[]; voiceInput?: boolean })
   | (ClientBase & { type: "turn.accepted"; conversationId: string })
   | (ClientBase & { type: "turn.status"; phase: "understanding" | "searching" | "composing"; label: string })
   | (ClientBase & { type: "tool.started"; tool: ToolName; label: string })
@@ -91,4 +96,9 @@ export type ServerFrame =
   | (ClientBase & { type: "turn.clarification"; conversationId: string; message: string; choices: Array<{ id: string; label: string }> })
   | (ClientBase & { type: "turn.completed"; conversationId: string; assistantMessage: string; appliedFilters: Array<Record<string, unknown>>; result: { total: number; records: RecordView[]; places?: PlaceView[]; tripPlan?: TripPlan; mapFeatures: GeoJSON.FeatureCollection }; sources: SourceView[] })
   | (ClientBase & { type: "turn.cancelled" })
-  | (ClientBase & { type: "turn.error"; code: string; message: string; retryable: boolean });
+  | (ClientBase & { type: "turn.error"; code: string; message: string; retryable: boolean })
+  | (ClientBase & { type: "voice.ready" })
+  | (ClientBase & { type: "voice.transcript.delta"; text: string })
+  | (ClientBase & { type: "voice.transcript.completed"; text: string })
+  | (ClientBase & { type: "voice.stopped" })
+  | (ClientBase & { type: "voice.error"; code: VoiceErrorCode; message: string; retryable: boolean });
