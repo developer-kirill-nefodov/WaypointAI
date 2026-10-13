@@ -1,8 +1,27 @@
-import { defineConfig } from "vite";
+import { defineConfig, type Plugin } from "vite";
+
+/**
+ * Dev only: "localhost" and "127.0.0.1" are different origins with separate browser storage, so the language
+ * and saved chats seemed to reset when switching between them. Every request is moved to one origin.
+ */
+function canonicalDevHost(): Plugin {
+  return {
+    name: "canonical-dev-host",
+    configureServer(server) {
+      server.middlewares.use((request, response, next) => {
+        const host = request.headers.host ?? "";
+        if (!/^localhost(:\d+)?$/i.test(host)) return next();
+        response.statusCode = 307;
+        response.setHeader("Location", `http://${host.replace(/^localhost/i, "127.0.0.1")}${request.url ?? "/"}`);
+        response.end();
+      });
+    },
+  };
+}
 import react from "@vitejs/plugin-react";
 
 export default defineConfig({
-  plugins: [react()],
+  plugins: [react(), canonicalDevHost()],
   build: {
     rollupOptions: {
       output: {
