@@ -30,8 +30,13 @@ flowchart LR
     ROUTE -->|Road geometry and metrics| API
     API -->|Route response| UI
     UI -->|Viewport tile requests| TILES[Configured map tile provider]
+    UI -.->|Optional voice.* audio frames| API
+    API -.->|Audio relay, opt-in demo| STT[OpenAI Realtime transcription]
+    STT -.->|Transcript deltas| API
 
     OSM[OpenStreetMap regional extracts] -->|Manual import command| DB
+    INGV[INGV FDSN event API] -->|Manual event import, validated and idempotent| DB
+    UI -->|REST: investigation search and query| API
     ADMIN[Administrator] -->|Explicit setup command| DOWNLOAD[Download Ollama runtime and model weights]
     DOWNLOAD --> MODEL
 ```
@@ -47,6 +52,9 @@ flowchart LR
 | Allowlisted functions | Searches optional configured records, verified OSM places, and source metadata | Function arguments are validated; queries use repositories and bounded results. |
 | Sequelize and PostgreSQL | Stores imported places, source metadata, conversations, and optional records | The model never connects to the database directly. |
 | Route service | Returns road geometry and route metrics for verified coordinates | The backend sends coordinates only; it does not send chat text, place names, or IDs. The demo endpoint is not guaranteed. |
+| Voice relay (demo, opt-in) | Streams microphone audio to OpenAI transcription and returns live transcript text to the composer | Disabled by default. The backend holds the API key; the browser never contacts OpenAI. Audio and transcripts are not stored or logged. |
+| Event importer (demo) | Imports INGV earthquake events into `records`, links them to nearby places, and records sync runs | Run manually with `npm run data:import:events`. HTTPS to an allowlisted host only; see [technical decisions](technical-decisions.md). |
+| Investigation API (demo) | Bounded event search, details, and natural-language queries | The model may call only `search_events`; see [demo and review guide](demo-and-review.md). |
 | OSM snapshot importer | Imports selected regional place extracts into the local database | Run manually. Snapshot coverage can be incomplete or outdated; retain ODbL attribution. |
 | Model setup scripts | Install the local Ollama runtime and pull the configured model | Run manually with `npm run model:install:local`, start the server with `npm run model:serve`, then pull weights with `npm run model:pull`. Model weights and runtime files stay in ignored `data/local/`. |
 
@@ -56,6 +64,7 @@ flowchart LR
 - The model can request only the functions declared in the server allowlist. The backend validates arguments and executes the relevant repository operation.
 - Place search uses locally imported OpenStreetMap snapshots. The model does not browse the internet.
 - Routing is a separate backend request to the configured routing provider. In the demo configuration, that provider may be public and receives route coordinates.
+- When voice input is enabled and the user records, microphone audio leaves the machine for OpenAI transcription through the backend. The transcript only fills the composer; the user decides whether to send it.
 - The browser map may request visible tiles from the configured tile provider. These requests do not include chat text or selected place IDs.
 - Model runtime files, model weights, local database files, `.env`, imported chat material, and screen recordings must not be committed.
 

@@ -23,6 +23,7 @@ The model has no direct SQL, database credentials, filesystem, or arbitrary web-
 - Tool calls are read-only, allowlisted, validated, and bounded.
 - Optional routing is a separate integration that receives coordinates only.
 - Visible basemap tile requests are made by the browser and follow the selected tile provider's policy.
+- Optional voice input (demo, disabled by default) is the exception to local processing. While the user records, the backend relays microphone audio to OpenAI Realtime transcription. The UI states this during recording, and the backend does not store or log audio or transcripts. Keep it disabled when audio must not leave the machine.
 
 An allowlist alone is not authorization. The current demo has no user login or per-workspace authorization. Before using sensitive or customer data, enforce access control on every request, use a least-privilege database account, minimize model context, and define logging and retention.
 
