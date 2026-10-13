@@ -320,6 +320,24 @@
         "totalDays": { "type": "integer", "minimum": 1, "maximum": 7 },
         "supportedDays": { "type": "integer", "minimum": 0, "maximum": 7 },
         "travelMode": { "enum": ["driving", "none"] },
+        "cities": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 5,
+          "description": "City trips: verified settlements in visiting order.",
+          "items": {
+            "type": "object",
+            "required": ["name", "placeId", "lat", "lon", "countryCode"],
+            "properties": {
+              "name": { "type": "string", "maxLength": 240 },
+              "placeId": { "type": "string", "maxLength": 120 },
+              "lat": { "type": "number", "minimum": -90, "maximum": 90 },
+              "lon": { "type": "number", "minimum": -180, "maximum": 180 },
+              "countryCode": { "type": ["string", "null"], "pattern": "^[A-Z]{2}$" }
+            },
+            "additionalProperties": false
+          }
+        },
         "airport": {
           "type": ["object", "null"],
           "required": ["placeId", "code", "name", "lat", "lon"],
@@ -342,6 +360,7 @@
             "properties": {
               "day": { "type": "integer", "minimum": 1, "maximum": 7 },
               "area": { "enum": ["airport_radius", "city"] },
+              "city": { "type": "string", "maxLength": 240 },
               "stopPlaceIds": { "type": "array", "maxItems": 50, "items": { "type": "string", "maxLength": 120 } },
               "straightLineDistanceMetersFromAirport": { "type": "object", "additionalProperties": { "type": "integer", "minimum": 0 } },
               "routeStatus": { "enum": ["pending", "not_requested", "unavailable"] }

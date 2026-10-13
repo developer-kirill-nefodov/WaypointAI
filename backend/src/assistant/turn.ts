@@ -9,6 +9,9 @@ import { releaseInference, tryAcquireInference } from "../llm/inference-gate.js"
 import { explicitTravelCountry, formatTravelPlacePrefetch, inferRecentTravelCountry, isFreshTravelContext, prefetchTravelPlaces, recentTravelContextMessages, type TravelPlacePrefetch } from "./travel-place-prefetch.js";
 import { getTripClarification, isTripPlanningMessage, resolveTripPreferences } from "./trip-clarification.js";
 import { buildTripPlan } from "./trip-plan.js";
+import { allocateTripDays, resolveLatestTripCities, type TripCity } from "./trip-cities.js";
+import { buildCityTripPlan, isCityTrip, prefetchCityTrip } from "./city-trip-plan.js";
+import { resolveSettlement } from "../data/settlement.repository.js";
 import type { TripPlan } from "@waypoint-ai/shared";
 import { SYSTEM_PROMPT } from "./prompts/system-prompt.js";
 import { text, toolLabel } from "./copy.js";
@@ -98,7 +101,13 @@ export async function processTurn(
       emit({ protocolVersion: 1, type: "turn.clarification", requestId: frame.requestId, conversationId, message, choices });
       return;
     }
-    const clarification = getTripClarification(frame.message, relevantUserMessages, language);
+    // Cities of a trip are resolved against verified settlements before the deterministic trip questions.
+    const talksAboutTrip = isTripPlanningMessage(frame.message) || relevantUserMessages.some(isTripPlanningMessage);
+    const { cities: tripCities, text: tripText } = talksAboutTrip
+      ? await resolveLatestTripCities([...relevantUserMessages, frame.message], resolveSettlement)
+      : { cities: [] as TripCity[], text: "" };
+    const cityTrip = isCityTrip(tripCities);
+    const clarification = getTripClarification(frame.message, relevantUserMessages, language, cityTrip);
     if (clarification) {
       await saveConversationTurn(conversationId, workspaceId, [
         ...conversationHistory,
@@ -164,9 +173,16 @@ export async function processTurn(
       return;
     }
     // Preferences come from the whole trip history, so only rebuild the plan when this turn is about the trip.
-    tripPlan = isTripPlanningMessage(frame.message)
-      ? buildTripPlan(travelPrefetch, resolveTripPreferences([...relevantUserMessages, frame.message]))
-      : null;
+    const tripPreferences = resolveTripPreferences([...relevantUserMessages, frame.message]);
+    if (cityTrip && isTripPlanningMessage(frame.message) && tripPreferences.routeMode) {
+      const daysPerCity = allocateTripDays(tripText, tripCities, tripPreferences.totalDays);
+      const stops = await prefetchCityTrip(tripCities, daysPerCity, allowedSourceIds);
+      tripPlan = buildCityTripPlan(stops, tripPreferences.routeMode);
+      placesFound = [...new Map(stops.flatMap((stop) => stop.places).map((place) => [place.id, place])).values()];
+      travelSourceMetadata = await getSources(tripPlan.sourceIds);
+    } else {
+      tripPlan = isTripPlanningMessage(frame.message) ? buildTripPlan(travelPrefetch, tripPreferences) : null;
+    }
     if (tripPlan) {
       const message = formatTripPlanMessage(tripPlan, placesFound, language);
       emit({ protocolVersion: 1, type: "turn.status", requestId: frame.requestId, phase: "composing", label: text(language, "Собираю план из проверенных точек", "Building a plan from verified places") });

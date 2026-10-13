@@ -2,13 +2,14 @@ import type { PlaceView, TripPlan } from "@waypoint-ai/shared";
 
 export function formatTripPlanMessage(plan: TripPlan, places: PlaceView[], language: "en" | "ru" | "de"): string {
   const placeById = new Map(places.map((place) => [place.id, place]));
+  const multiCity = (plan.cities?.length ?? 0) > 1;
   const lines = language === "ru"
-    ? [`План на ${plan.totalDays} ${plan.totalDays === 1 ? "день" : plan.totalDays < 5 ? "дня" : "дней"} по городу ${plan.city}, ${plan.countryCode}. Точки выбраны из локального снимка OpenStreetMap; это найденные объекты, не рейтинг рекомендаций.`]
-    : language === "de" ? [`Ein ${plan.totalDays}-Tage-Plan für ${plan.city}, ${plan.countryCode}. Die Orte stammen aus dem lokalen OpenStreetMap-Datenstand und sind Suchtreffer, keine Empfehlungen.`]
-      : [`A ${plan.totalDays}-day plan for ${plan.city}, ${plan.countryCode}. Stops come from the local OpenStreetMap snapshot; these are matched places, not ranked recommendations.`];
+    ? [`План на ${plan.totalDays} ${plan.totalDays === 1 ? "день" : plan.totalDays < 5 ? "дня" : "дней"} ${multiCity ? "по городам" : "по городу"} ${plan.city}${multiCity ? "" : `, ${plan.countryCode}`}. Точки выбраны из локального снимка OpenStreetMap; это найденные объекты, не рейтинг рекомендаций.`]
+    : language === "de" ? [`Ein ${plan.totalDays}-Tage-Plan für ${plan.city}${multiCity ? "" : `, ${plan.countryCode}`}. Die Orte stammen aus dem lokalen OpenStreetMap-Datenstand und sind Suchtreffer, keine Empfehlungen.`]
+      : [`A ${plan.totalDays}-day plan ${multiCity ? "across" : "for"} ${plan.city}${multiCity ? "" : `, ${plan.countryCode}`}. Stops come from the local OpenStreetMap snapshot; these are matched places, not ranked recommendations.`];
 
   for (const day of plan.days) {
-    const dayTitle = language === "ru" ? `\n### День ${day.day} · ${day.area === "airport_radius" ? `район аэропорта ${plan.airport?.code ?? ""}` : plan.city}` : language === "de" ? `\n### Tag ${day.day} · ${day.area === "airport_radius" ? `Flughafengebiet ${plan.airport?.code ?? ""}` : plan.city}` : `\n### Day ${day.day} · ${day.area === "airport_radius" ? `airport area ${plan.airport?.code ?? ""}` : plan.city}`;
+    const dayTitle = language === "ru" ? `\n### День ${day.day} · ${day.area === "airport_radius" ? `район аэропорта ${plan.airport?.code ?? ""}` : day.city ?? plan.city}` : language === "de" ? `\n### Tag ${day.day} · ${day.area === "airport_radius" ? `Flughafengebiet ${plan.airport?.code ?? ""}` : day.city ?? plan.city}` : `\n### Day ${day.day} · ${day.area === "airport_radius" ? `airport area ${plan.airport?.code ?? ""}` : day.city ?? plan.city}`;
     lines.push(dayTitle);
     if (day.area === "airport_radius" && plan.airport) {
       lines.push(language === "ru" ? `Начальная точка: ${plan.airport.name} (${plan.airport.code}).` : language === "de" ? `Startpunkt: ${plan.airport.name} (${plan.airport.code}).` : `Starting point: ${plan.airport.name} (${plan.airport.code}).`);

@@ -80,6 +80,15 @@ export interface PlaceView {
   lon: number;
 }
 
+/** A city of a multi-city trip, resolved to a verified OSM settlement. */
+export interface TripCityView {
+  name: string;
+  placeId: string;
+  lat: number;
+  lon: number;
+  countryCode: string | null;
+}
+
 export interface TripPlan {
   status: "ready" | "partial";
   countryCode: string;
@@ -87,10 +96,14 @@ export interface TripPlan {
   totalDays: number;
   supportedDays: number;
   travelMode: "driving" | "none";
+  /** Present for city trips: every city in visiting order. */
+  cities?: TripCityView[];
   airport: { placeId: string; code: string; name: string; lat: number; lon: number } | null;
   days: Array<{
     day: number;
     area: "airport_radius" | "city";
+    /** City of this day for city trips. */
+    city?: string;
     stopPlaceIds: string[];
     straightLineDistanceMetersFromAirport: Record<string, number>;
     routeStatus: "pending" | "not_requested" | "unavailable";

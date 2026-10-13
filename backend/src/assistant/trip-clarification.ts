@@ -32,10 +32,16 @@ const DAY_COUNT_PATTERN = new RegExp(String.raw`(?<![\p{L}\d])(${DAY_COUNT_WORDS
 const WEEK_PATTERN = /на\s+(?:одну\s+)?неделю|for\s+(?:a|one)\s+week\b|(?:a|one)[- ]week\b|eine\s+woche/i;
 const WARSAW_WORD = /warsaw|warszaw|warschau|варшав|mazovia|польск|poland|polska|polen/i;
 
-export function getTripClarification(currentMessage: string, recentUserMessages: string[], language: Language): TripClarification | null {
+export function getTripClarification(
+  currentMessage: string,
+  recentUserMessages: string[],
+  language: Language,
+  /** True when the server already resolved trip cities that the country matchers do not know (for example Firenze). */
+  citiesResolved = false,
+): TripClarification | null {
   const context = [...recentUserMessages.slice(-8), currentMessage].join("\n");
   const warsawAirportTrip = ITINERARY_WORD.test(context) && AIRPORT_WORD.test(context) && WARSAW_WORD.test(context);
-  const destinationKnown = Boolean(explicitTravelCountry(currentMessage) ?? inferRecentTravelCountry(recentUserMessages));
+  const destinationKnown = citiesResolved || Boolean(explicitTravelCountry(currentMessage) ?? inferRecentTravelCountry(recentUserMessages));
   const dayPlanRequested = ROUTE_WORD.test(currentMessage) || hasTripDuration(currentMessage);
   if (!warsawAirportTrip && !(destinationKnown && dayPlanRequested)) return null;
   const cityOnly = isCityOnlyTrip([...recentUserMessages, currentMessage]);
@@ -158,7 +164,7 @@ export function hasTripDuration(value: string): boolean {
 }
 
 /** Returns the first stated trip length of 1–7 days; longer trips are not planned deterministically. */
-function parseTripDuration(value: string): number | null {
+export function parseTripDuration(value: string): number | null {
   if (removesSecondDay(value)) return 1;
   const match = DAY_COUNT_PATTERN.exec(value);
   if (match) {

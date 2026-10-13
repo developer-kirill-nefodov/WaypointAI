@@ -1,6 +1,6 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { Fragment, useCallback, useEffect, useMemo, useState } from "react";
 import { ArrowUpRight, ChevronDown, Clock3, MapPin, Navigation, Route, RotateCw } from "lucide-react";
-import { Circle, CircleMarker, GeoJSON as LeafletGeoJSON, MapContainer, Popup, TileLayer, Tooltip, useMap, useMapEvents } from "react-leaflet";
+import { Circle, CircleMarker, GeoJSON as LeafletGeoJSON, MapContainer, Polygon, Popup, TileLayer, Tooltip, useMap, useMapEvents } from "react-leaflet";
 import { latLng, latLngBounds, type LatLngBounds, type LeafletEvent, type Map as LeafletMap } from "leaflet";
 import type { PlaceView, RecordView, SourceView, TripPlan } from "@waypoint-ai/shared";
 import type { Feature, Geometry } from "geojson";
@@ -8,6 +8,7 @@ import { buildRoute } from "../../shared/api/client";
 import { formatKm, translate, type Language } from "../../shared/i18n";
 import "leaflet/dist/leaflet.css";
 import RouteLayer, { RouteGeometry, type RoutePoint, type RouteState } from "./RouteLayer";
+import { visitedAreaOutline } from "./visited-area";
 
 type MapPlace = PlaceView;
 type PlacesResponse = { total: number; places: MapPlace[] };
@@ -113,6 +114,26 @@ function RadiusOverlay({ radius, language }: { radius: SearchRadius; language: L
       </CircleMarker>
     </>
   );
+}
+
+type VisitedArea = { city: string; points: RoutePoint[]; days: number[] };
+
+/** Outlines the area each city's stops cover, in the radius color, labelled as visited places rather than a border. */
+function VisitedAreas({ areas, language }: { areas: VisitedArea[]; language: Language }) {
+  const t = (ru: string, en: string) => translate(language, ru, en);
+  return <>{areas.map((area) => {
+    const outline = visitedAreaOutline(area.points);
+    if (outline.length < 3) return null;
+    const dayLabel = area.days.length === 1 ? `${t("день", "day")} ${area.days[0]}` : `${t("дни", "days")} ${area.days[0]}–${area.days[area.days.length - 1]}`;
+    // The label sits on the outline's northern edge so it does not cover the stops inside.
+    const top = outline.reduce((north, point) => point[0] > north[0] ? point : north);
+    return <Fragment key={area.city}>
+      <Polygon positions={outline} interactive={false} pathOptions={{ color: RADIUS_COLOR, weight: 2, opacity: 0.9, fillColor: RADIUS_COLOR, fillOpacity: 0.07, dashArray: "6 4" }} />
+      <CircleMarker center={top} radius={0} interactive={false} pathOptions={{ opacity: 0, fillOpacity: 0 }}>
+        <Tooltip permanent direction="top" offset={[0, -4]} className="radius-label">{area.city} · {dayLabel} · {area.points.length} {t("мест", "places")}</Tooltip>
+      </CircleMarker>
+    </Fragment>;
+  })}</>;
 }
 
 /** Centers the map on a point chosen from the details dialog; the revision re-centers on repeated requests. */
@@ -325,8 +346,19 @@ export default function MapPanel({
     const points: RoutePoint[] = day.area === "airport_radius" && tripPlan.airport
       ? [{ id: tripPlan.airport.placeId, name: tripPlan.airport.name, lat: tripPlan.airport.lat, lon: tripPlan.airport.lon, countryCode: tripPlan.countryCode, city: tripPlan.city }, ...places]
       : places;
-    return { day: day.day, area: day.area, points, routeStatus: day.routeStatus };
+    return { day: day.day, area: day.area, city: day.city ?? tripPlan.city, points, routeStatus: day.routeStatus };
   }) ?? [], [tripPlan, tripPlacesById]);
+  const visitedAreas = useMemo(() => {
+    const byCity = new Map<string, VisitedArea>();
+    for (const route of tripRouteInputs) {
+      if (route.area !== "city") continue;
+      const area = byCity.get(route.city) ?? { city: route.city, points: [], days: [] };
+      area.points.push(...route.points.filter((point) => !area.points.some((known) => known.id === point.id)));
+      area.days.push(route.day);
+      byCity.set(route.city, area);
+    }
+    return [...byCity.values()];
+  }, [tripRouteInputs]);
   const focusPoints = useMemo(() => {
     if (focusedDay === "city") return tripRouteInputs.filter((route) => route.area === "city").flatMap((route) => route.points);
     if (focusedDay === null) return [];
@@ -373,6 +405,7 @@ export default function MapPanel({
           {investigation && <FitToSelection selected={selectedRecord} places={highlights} />}
           {investigation && focus && <FocusPoint focus={focus} />}
           {radius && <RadiusOverlay radius={radius} language={language} />}
+          {visitedAreas.length > 0 && <VisitedAreas areas={visitedAreas} language={language} />}
           {tileUrl && <TileLayer url={tileUrl} attribution='&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap contributors</a>' />}
           {countryBoundaries.map(({ code, feature }) => <LeafletGeoJSON key={code} data={feature} style={{ color: COUNTRY_BORDER_COLOR, weight: 1.5, opacity: 0.9, fillColor: COUNTRY_BORDER_COLOR, fillOpacity: 0.02, dashArray: "4 6" }} interactive={false} />)}
           {tripPlan ? tripRouteInputs.map((route) => route.routeStatus === "pending" && <TripRouteLayer key={`${tripPlan.totalDays}:${route.day}:${route.points.map((point) => point.id).join(",")}`} day={route.day} points={route.points} retryKey={dayRouteRetryKeys[route.day] ?? 0} onState={handleDayRouteState} />) : !investigation && <RouteLayer points={routePoints} retryKey={routeRetryKey} onState={handleRouteState} />}
@@ -386,7 +419,7 @@ export default function MapPanel({
             </CircleMarker>;
           })}
         </MapContainer>
-        {countryBoundaries.length > 0 && <div className="boundary-legend"><span aria-hidden="true" />{t("Страны:", "Countries:")} {countryBoundaries.map(({ code }) => countryName(code, language)).join(" · ")}{tripPlan && <><span className="city-focus-dot" aria-hidden="true" />{t("Точки города:", "City points:")} {tripPlan.city}{focusedDay === "city" ? ` · ${focusPoints.length}` : focusedDay !== null ? ` · ${t("день", "day")} ${focusedDay}` : ""}</>}</div>}
+        {countryBoundaries.length > 0 && <div className="boundary-legend"><span aria-hidden="true" />{t("Страны:", "Countries:")} {countryBoundaries.map(({ code }) => countryName(code, language)).join(" · ")}{tripPlan && <><span className="city-focus-dot" aria-hidden="true" />{(tripPlan.cities?.length ?? 0) > 1 ? t("Города:", "Cities:") : t("Точки города:", "City points:")} {tripPlan.city}{focusedDay === "city" ? ` · ${focusPoints.length}` : focusedDay !== null ? ` · ${t("день", "day")} ${focusedDay}` : ""}</>}</div>}
         {!tripPlan && !investigation && routeState.status !== "idle" && <RouteSummary language={language} state={routeState} totalPoints={routeCandidates.total} expanded={routeExpanded} onToggle={() => setRouteExpanded((value) => !value)} onRetry={() => setRouteRetryKey((value) => value + 1)} />}
       </div>
       {tripPlan && <TripPlanBoard language={language} plan={tripPlan} highlights={highlights} routeStates={dayRouteStates} sourceLabels={sourceLabels} sourceDates={sourceDates} focusedDay={focusedDay} selectedPlaceId={selectedItem?.kind === "place" ? selectedItem.id : null} onSelectDay={(day) => { setFocusedDay(day); setFocusRevision((revision) => revision + 1); const failed = day !== "city" && dayRouteStates[day]?.status === "error"; if (failed) setDayRouteRetryKeys((current) => ({ ...current, [day]: (current[day] ?? 0) + 1 })); }} onSelectPlace={(id) => onSelectResult(`place:${id}`)} />}
@@ -438,7 +471,7 @@ function TripPlanBoard({ language, plan, highlights, routeStates, sourceLabels, 
   const snapshotDates = [...new Set(plan.sourceIds.flatMap((sourceId) => sourceDates[sourceId] ? [sourceDates[sourceId]!] : []))];
   return <section className="trip-plan-board" aria-label={title}>
     <header className="trip-plan-heading">
-      <div><span className="eyebrow">{t("ЛОКАЛЬНЫЕ ДАННЫЕ · ПРОВЕРЕННЫЕ ТОЧКИ", "LOCAL DATA · VERIFIED PLACES")}</span><button type="button" className="trip-plan-city-button" aria-pressed={focusedDay === "city"} onClick={() => onSelectDay("city")}><h3>{title}: {plan.city}, {countryName(plan.countryCode, language)}</h3><small>{t("Показать все точки города", "Show all city points")}</small></button></div>
+      <div><span className="eyebrow">{t("ЛОКАЛЬНЫЕ ДАННЫЕ · ПРОВЕРЕННЫЕ ТОЧКИ", "LOCAL DATA · VERIFIED PLACES")}</span><button type="button" className="trip-plan-city-button" aria-pressed={focusedDay === "city"} onClick={() => onSelectDay("city")}><h3>{title}: {plan.city}{(plan.cities?.length ?? 0) > 1 ? "" : `, ${countryName(plan.countryCode, language)}`}</h3><small>{t("Показать все точки города", "Show all city points")}</small></button></div>
       <span className={`trip-plan-status ${plan.status}`}>{plan.status === "ready" ? t("Точки распределены", "Stops organized") : t("Частично", "Partial")}</span>
     </header>
     {plan.days.map((day) => {
@@ -448,7 +481,7 @@ function TripPlanBoard({ language, plan, highlights, routeStates, sourceLabels, 
         const routeOrder = new Map(state.orderedPoints.map((point, index) => [point.id, index]));
         dayPlaces.sort((left, right) => (routeOrder.get(left.id) ?? Number.MAX_SAFE_INTEGER) - (routeOrder.get(right.id) ?? Number.MAX_SAFE_INTEGER));
       }
-      const area = day.area === "airport_radius" ? `${plan.airport?.code ?? ""} · ${t("рядом с аэропортом", "near the airport")}` : plan.city;
+      const area = day.area === "airport_radius" ? `${plan.airport?.code ?? ""} · ${t("рядом с аэропортом", "near the airport")}` : day.city ?? plan.city;
       const routeLabel = plan.travelMode === "none" ? t("Маршрут не запрашивался", "Route not requested")
         : state?.status === "ready" ? `${t("Маршрут построен", "Route calculated")} · ${formatDistance(state.plan?.distanceMeters ?? 0, language)} · ~${Math.max(1, Math.round((state.plan?.durationSeconds ?? 0) / 60))} ${t("мин", "min")}`
           : state?.status === "loading" ? t("Считаю маршрут по дорогам…", "Calculating road route…")

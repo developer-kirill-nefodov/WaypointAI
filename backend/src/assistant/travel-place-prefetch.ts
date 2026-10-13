@@ -14,6 +14,8 @@ const COUNTRY_MATCHERS: Array<[string, RegExp]> = [
   ["ES", /испан|spain|españa|spanien|мадрид|madrid/i],
 ];
 const CAPITAL_CITIES: Record<string, string> = { DE: "Berlin", PL: "Warszawa", RO: "București", FR: "Paris", IT: "Roma", ES: "Madrid" };
+/** Capitals handled by the single-city trip flow (with the Warsaw airport options). */
+export const CAPITAL_TRIP_CITIES = new Set(Object.values(CAPITAL_CITIES));
 const CITY_MATCHERS: Array<[string, RegExp]> = [
   ["Berlin", /\bberlin\b|берлин/i],
   ["Warszawa", /\bwarsaw\b|\bwarszawa\b|\bwarschau\b|варшав/i],
