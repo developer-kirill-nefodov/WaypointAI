@@ -28,8 +28,8 @@ const PAGE_LABELS: Record<AppPage, PageLabel> = {
     caption: ["КАРТА И ЧАТ", "MAP AND CHAT"],
   },
   investigation: {
-    title: ["Расследование", "Investigation"],
-    caption: ["РАССЛЕДОВАНИЕ", "INVESTIGATION"],
+    title: ["Обзор событий", "Event explorer"],
+    caption: ["ОБЗОР СОБЫТИЙ", "EVENT EXPLORER"],
   },
   model: {
     title: ["Модель ИИ", "AI model"],

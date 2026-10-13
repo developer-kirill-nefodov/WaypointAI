@@ -136,11 +136,11 @@ export default function InvestigationWorkspace({ language }: InvestigationWorksp
 
   return (
     <div className="content-grid investigation-grid">
-      <section className="chat-panel investigation-panel" aria-label={t("Расследование", "Investigation")}>
+      <section className="chat-panel investigation-panel" aria-label={t("Обзор событий", "Event explorer")}>
         <div className="investigation-controls">
           <div className="panel-heading">
             <div>
-              <span className="eyebrow">{t("РАССЛЕДОВАНИЕ · ОТКРЫТЫЕ ДАННЫЕ", "INVESTIGATION · OPEN DATA")}</span>
+              <span className="eyebrow">{t("ОБЗОР СОБЫТИЙ · ОТКРЫТЫЕ ДАННЫЕ", "EVENT EXPLORER · OPEN DATA")}</span>
               <h2>{t("Сейсмические события", "Seismic events")}</h2>
             </div>
             <button
