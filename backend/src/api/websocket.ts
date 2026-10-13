@@ -1,25 +1,35 @@
 import { randomUUID } from "node:crypto";
 import type { ClientFrame, ServerFrame } from "@waypoint-ai/shared";
-import type { Server } from "node:http";
+import type { IncomingMessage, Server } from "node:http";
 import { WebSocket, WebSocketServer } from "ws";
 import { processTurn } from "../assistant/turn.js";
 import { hasConversation } from "../data/conversation.repository.js";
 import { env } from "../config/env.js";
 import { ActiveTurnGate } from "./active-turn.js";
+import { clientAddress } from "./client-address.js";
 import { isAllowedOrigin } from "./origin.js";
 import { closeAllClients, startHeartbeat } from "./websocket-lifecycle.js";
 import { getCapabilities } from "../services/readiness.js";
 import { validateClientFrame } from "../schemas/websocket.js";
 import { isVoiceInputConfigured } from "../config/voice.js";
 import { openRealtimeTranscription } from "../voice/openai-realtime.provider.js";
+import { VoiceBudget } from "../voice/voice-budget.js";
 import { isVoiceFrame, VoiceSessionManager } from "../voice/voice-session.js";
 
 const VOICE_FINISH_TIMEOUT_MS = 10_000;
+const VOICE_BUDGET_WINDOW_MS = 60 * 60 * 1000;
 
 /** Attaches the assistant WebSocket; returns a function that closes every client, for graceful shutdown. */
 export function attachWebSocket(server: Server): (code: number, reason: string) => Promise<void> {
   const websocketServer = new WebSocketServer({ noServer: true, maxPayload: 16 * 1024 });
   const stopHeartbeat = startHeartbeat(websocketServer);
+  const voiceBudget = new VoiceBudget({
+    maxConcurrentSessions: env.VOICE_MAX_CONCURRENT_SESSIONS,
+    maxSessionsPerClient: env.VOICE_SESSIONS_PER_CLIENT_PER_HOUR,
+    maxSecondsPerClient: env.VOICE_SECONDS_PER_CLIENT_PER_HOUR,
+    sessionSeconds: env.VOICE_MAX_SESSION_SECONDS,
+    windowMs: VOICE_BUDGET_WINDOW_MS,
+  });
   server.on("upgrade", (request, socket, head) => {
     const url = new URL(request.url ?? "/", `http://${request.headers.host ?? "127.0.0.1"}`);
     if (url.pathname !== "/api/v1/assistant/ws" || !isAllowedOrigin(request.headers.origin, env.FRONTEND_ORIGIN, env.NODE_ENV)) {
@@ -30,13 +40,15 @@ export function attachWebSocket(server: Server): (code: number, reason: string) 
     websocketServer.handleUpgrade(request, socket, head, (websocket) => websocketServer.emit("connection", websocket, request));
   });
 
-  websocketServer.on("connection", (websocket: WebSocket) => {
+  websocketServer.on("connection", (websocket: WebSocket, request: IncomingMessage) => {
     const activeTurn = new ActiveTurnGate();
+    const client = clientAddress(request, env.TRUST_PROXY);
     const voice = new VoiceSessionManager(
       {
         enabled: isVoiceInputConfigured(env),
         maxSessionMs: env.VOICE_MAX_SESSION_SECONDS * 1000,
         finishTimeoutMs: VOICE_FINISH_TIMEOUT_MS,
+        acquireBudget: () => voiceBudget.tryAcquire(client),
       },
       openRealtimeTranscription,
       (event) => send(websocket, event),

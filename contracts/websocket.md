@@ -305,7 +305,8 @@ Voice frames share the assistant connection but are independent of turns. A tran
 - `voice.transcript.delta` carries newly recognized text that is appended to the previous deltas for the same request.
 - `voice.transcript.completed` carries the final text for the committed audio and replaces the accumulated deltas.
 - `voice.stopped` and `voice.error` are terminal for a voice session.
-- Error `code` allowlist: `voice_disabled`, `invalid_message`, `busy`, `provider_unavailable`, `timeout`, `internal_error`. Never forward the provider's raw error text, credentials, or internal addresses.
+- Error `code` allowlist: `voice_disabled`, `invalid_message`, `busy`, `rate_limited`, `provider_unavailable`, `timeout`, `internal_error`.
+- `rate_limited`: the server caps open voice sessions process-wide and, per client address, the number of sessions and recording seconds in a fixed window (`VOICE_MAX_CONCURRENT_SESSIONS`, `VOICE_SESSIONS_PER_CLIENT_PER_HOUR`, `VOICE_SECONDS_PER_CLIENT_PER_HOUR`). Each session reserves its full `VOICE_MAX_SESSION_SECONDS` up front. Never forward the provider's raw error text, credentials, or internal addresses.
 - The backend does not store or log audio or transcript text.
 
 Voice lifecycle: `voice.start` → `voice.ready` → zero or more `voice.transcript.delta` → `voice.stop` → `voice.transcript.completed` (when speech was recognized) → `voice.stopped`. `voice.error` can replace any step after `voice.start`.

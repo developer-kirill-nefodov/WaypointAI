@@ -5,6 +5,7 @@ import {
   type TranscriptionProvider,
   type TranscriptionStream,
 } from "./transcription.provider.js";
+import type { VoiceBudgetDecision } from "./voice-budget.js";
 
 type VoiceClientFrame = Extract<ClientFrame, { type: "voice.start" | "voice.audio" | "voice.stop" }>;
 type VoiceServerFrame = Extract<ServerFrame, { type: `voice.${string}` }>;
@@ -14,6 +15,8 @@ export interface VoiceSessionConfig {
   maxSessionMs: number;
   /** How long to wait for the final transcript after the audio is committed. */
   finishTimeoutMs: number;
+  /** Reserves a slot in the shared spending budget; without it sessions are not limited beyond one per connection. */
+  acquireBudget?: () => VoiceBudgetDecision;
 }
 
 interface ActiveVoiceSession {
@@ -25,6 +28,7 @@ interface ActiveVoiceSession {
   finishTimer?: NodeJS.Timeout;
   audioCharacters: number;
   startedAt: number;
+  releaseBudget: () => void;
 }
 
 // Base64 PCM16 mono 24 kHz is 64,000 characters per second; allow headroom for chunk jitter.
@@ -36,6 +40,7 @@ const ERROR_MESSAGES: Record<VoiceErrorCode, string> = {
   voice_disabled: "Voice input is not enabled on this server.",
   invalid_message: "The audio stream could not be accepted.",
   busy: "A voice recording is already active in this connection.",
+  rate_limited: "Voice input limit reached. Try again later.",
   provider_unavailable: "Speech recognition is temporarily unavailable.",
   timeout: "Speech recognition did not respond in time.",
   internal_error: "Speech recognition failed unexpectedly.",
@@ -78,12 +83,19 @@ export class VoiceSessionManager {
       this.#sendError(frame.requestId, "busy", true);
       return;
     }
+    const budget = this.config.acquireBudget?.() ?? { ok: true as const, release: () => {} };
+    if (!budget.ok) {
+      console.warn("Voice session refused by the budget", { requestId: frame.requestId, reason: budget.reason });
+      this.#sendError(frame.requestId, "rate_limited", true);
+      return;
+    }
     const session: ActiveVoiceSession = {
       requestId: frame.requestId,
       phase: "connecting",
       controller: new AbortController(),
       audioCharacters: 0,
       startedAt: Date.now(),
+      releaseBudget: budget.release,
     };
     this.#session = session;
 
@@ -163,6 +175,7 @@ export class VoiceSessionManager {
     this.#session = undefined;
     clearTimeout(session.maxTimer);
     clearTimeout(session.finishTimer);
+    session.releaseBudget();
     session.controller.abort();
     session.stream?.close();
 

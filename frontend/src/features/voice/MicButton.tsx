@@ -41,6 +41,7 @@ export function voiceStatusText(language: Language, state: VoiceState, issue: Vo
   if (issue === "unsupported") return t("Браузер не поддерживает запись звука", "This browser does not support audio capture");
   if (issue === "disconnected") return t("Соединение прервано, запись остановлена", "Connection lost; recording stopped");
   if (issue === "voice_disabled") return t("Голосовой ввод выключен на сервере", "Voice input is disabled on the server");
+  if (issue === "rate_limited") return t("Лимит голосового ввода исчерпан, попробуйте позже", "Voice input limit reached; try again later");
   if (issue === "busy") return t("Запись уже идёт в этом соединении", "A recording is already active");
   if (issue === "timeout") return t("Сервис распознавания не ответил вовремя", "Speech recognition did not respond in time");
   if (issue === "provider_unavailable") return t("Сервис распознавания речи недоступен", "Speech recognition is unavailable");

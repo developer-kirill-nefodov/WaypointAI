@@ -25,6 +25,10 @@ export const voiceEnvironmentSchema = z.object({
   OPENAI_TRANSCRIBE_MODEL: z.string().min(1).max(80).default("gpt-live-transcribe"),
   VOICE_MAX_SESSION_SECONDS: z.coerce.number().int().min(10).max(600).default(120),
   VOICE_CONNECT_TIMEOUT_MS: z.coerce.number().int().min(1000).max(30000).default(10000),
+  // Spending limits for the paid provider: open sessions process-wide, and sessions and seconds per client per hour.
+  VOICE_MAX_CONCURRENT_SESSIONS: z.coerce.number().int().min(1).max(100).default(4),
+  VOICE_SESSIONS_PER_CLIENT_PER_HOUR: z.coerce.number().int().min(1).max(1000).default(20),
+  VOICE_SECONDS_PER_CLIENT_PER_HOUR: z.coerce.number().int().min(10).max(36000).default(900),
 });
 
 export type VoiceEnvironment = z.infer<typeof voiceEnvironmentSchema>;

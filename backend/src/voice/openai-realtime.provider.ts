@@ -45,6 +45,7 @@ export async function openRealtimeTranscription(
     const connectTimer = setTimeout(() => fail("timeout"), env.VOICE_CONNECT_TIMEOUT_MS);
     const onAbort = () => {
       closedByClient = true;
+      clearTimeout(connectTimer);
       upstream.terminate();
       reject(new TranscriptionProviderError("provider_unavailable"));
     };
