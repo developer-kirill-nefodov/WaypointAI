@@ -11,12 +11,9 @@ import Logo from "../../shared/ui/Logo";
 import { pageCaption, pageFromPath, pageTitle, pathForPage, type AppPage } from "../../shared/routing";
 import MicButton, { voiceStatusText } from "../voice/MicButton";
 import { isVoiceFrame, useVoiceInput } from "../voice/useVoiceInput";
+import { compactResult, lastUserMessage, readSavedConversation, writeSavedConversation, type ChatResult, type Message, type SavedChat } from "./chat-storage";
+import { contextSuggestions, rotateSuggestions, starterSuggestions } from "./suggestions";
 
-type Message = { role: "assistant" | "user"; text: string; durationMs?: number; choices?: Array<{ id: string; label: string }> };
-type SuggestedReply = { label: string; prompt: string };
-type SavedChat = { id: string; conversationId: string | null; messages: Message[]; savedAt: number };
-type SavedConversation = SavedChat & { recentChats: SavedChat[] };
-const HISTORY_STORAGE_KEY = "waypoint-ai:assistant-history:v1";
 const MESSAGE_ANCHOR_OFFSET_PX = 16;
 const MarkdownMessage = lazy(() => import("./MarkdownMessage"));
 // Loaded on first visit so the investigation page does not grow the initial bundle.
@@ -24,26 +21,6 @@ const InvestigationWorkspace = lazy(() => import("../investigation/Investigation
 
 function welcomeMessage(language: Language): Message {
   return { role: "assistant", text: translate(language, "Привет! Я локальный помощник для поиска и изучения геоданных. Опишите, что хотите найти.", "Hi! I’m your local assistant for exploring geospatial data. Tell me what you’d like to find.") };
-}
-
-function starterReplies(language: Language): SuggestedReply[] {
-  if (language === "de") return [
-    { label: "Verfügbare Quellen", prompt: "Welche Datenquellen sind verfügbar?" },
-    { label: "Verfügbare Quellen", prompt: "Welche Datenquellen sind verfügbar?" },
-    { label: "Orte finden", prompt: "Finde Orte im geladenen Kartengebiet" },
-    { label: "Suche präzisieren", prompt: "Welche Fragen kann ich zu den verfügbaren Daten stellen?" },
-  ];
-  return language === "ru" ? [
-    { label: "Какие источники доступны?", prompt: "Какие данные доступны в приложении?" },
-    { label: "Какие источники доступны?", prompt: "Какие источники данных доступны?" },
-    { label: "Найти места", prompt: "Найди места в загруженной области карты" },
-    { label: "Помочь уточнить поиск", prompt: "Какие вопросы можно задать по доступным данным?" },
-  ] : [
-    { label: "Available data sources", prompt: "What data sources are available?" },
-    { label: "Available data sources", prompt: "What data sources are available?" },
-    { label: "Find places", prompt: "Find places in the loaded map area" },
-    { label: "Help refine a search", prompt: "What can I ask about the available data?" },
-  ];
 }
 
 export default function AssistantWorkspace() {
@@ -65,7 +42,7 @@ export default function AssistantWorkspace() {
     window.addEventListener("popstate", onPopState);
     return () => window.removeEventListener("popstate", onPopState);
   }, [showPage]);
-  const [savedConversation] = useState(() => readSavedConversation(language));
+  const [savedConversation] = useState(() => readSavedConversation(welcomeMessage(language)));
   const socketRef = useRef<WebSocket | null>(null);
   const requestStartedAtRef = useRef<number | null>(null);
   const messagesRef = useRef<HTMLDivElement | null>(null);
@@ -75,7 +52,7 @@ export default function AssistantWorkspace() {
   const [connection, setConnection] = useState<ConnectionState>("connecting");
   const [reconnectInfo, setReconnectInfo] = useState<ReconnectInfo>(null);
   // Radius applied by the search_events tool in the latest answer; drawn on the map.
-  const [searchArea, setSearchArea] = useState<SearchArea | null>(null);
+  const [searchArea, setSearchArea] = useState<SearchArea | null>(savedConversation.result?.searchArea ?? null);
   // Bumped on every successful (re)connect so readiness and sources are reloaded after a server restart.
   const [metadataVersion, setMetadataVersion] = useState(0);
   const connectionRef = useRef<AssistantConnection | null>(null);
@@ -106,12 +83,12 @@ export default function AssistantWorkspace() {
   const [selectedSourceIds, setSelectedSourceIds] = useState<string[]>([]);
   const [fromDate, setFromDate] = useState("");
   const [toDate, setToDate] = useState("");
-  const [appliedFilters, setAppliedFilters] = useState<Array<Record<string, unknown>>>([]);
-  const [resultSources, setResultSources] = useState<SourceView[]>([]);
-  const [mapPlaces, setMapPlaces] = useState<PlaceView[]>([]);
-  const [mapRecords, setMapRecords] = useState<RecordView[]>([]);
-  const [tripPlan, setTripPlan] = useState<TripPlan | null>(null);
-  const [resultsLoaded, setResultsLoaded] = useState(false);
+  const [appliedFilters, setAppliedFilters] = useState<Array<Record<string, unknown>>>(savedConversation.result?.appliedFilters ?? []);
+  const [resultSources, setResultSources] = useState<SourceView[]>(savedConversation.result?.sources ?? []);
+  const [mapPlaces, setMapPlaces] = useState<PlaceView[]>(savedConversation.result?.places ?? []);
+  const [mapRecords, setMapRecords] = useState<RecordView[]>(savedConversation.result?.records ?? []);
+  const [tripPlan, setTripPlan] = useState<TripPlan | null>(savedConversation.result?.tripPlan ?? null);
+  const [resultsLoaded, setResultsLoaded] = useState(Boolean(savedConversation.result));
   const [selectedResultKey, setSelectedResultKey] = useState<string | null>(null);
   const [resetViewportRevision, setResetViewportRevision] = useState(0);
   const [lastSubmittedQuery, setLastSubmittedQuery] = useState(() => lastUserMessage(savedConversation.messages));
@@ -290,19 +267,17 @@ export default function AssistantWorkspace() {
     };
   }, []);
 
+  // The result of the last completed turn travels with the chat, so a reload or a reopened chat shows it again.
+  const currentResult: ChatResult | null = resultsLoaded
+    ? compactResult({ places: mapPlaces, records: mapRecords, tripPlan, searchArea, appliedFilters, sources: resultSources })
+    : null;
+  const currentResultRef = useRef(currentResult);
+  currentResultRef.current = currentResult;
+
   useEffect(() => {
-    try {
-      window.localStorage.setItem(HISTORY_STORAGE_KEY, JSON.stringify({
-        id: localChatId,
-        conversationId,
-        messages: messages.slice(-100),
-        savedAt: Date.now(),
-        recentChats: recentChats.slice(0, 30),
-      }));
-    } catch {
-      setHistoryClearWarning(translate(language, "Не удалось сохранить переписку в браузере.", "Could not save the conversation in this browser."));
-    }
-  }, [conversationId, localChatId, messages, recentChats, language]);
+    const saved = writeSavedConversation({ id: localChatId, conversationId, messages, savedAt: Date.now(), result: currentResultRef.current, recentChats });
+    if (!saved) setHistoryClearWarning(translate(language, "Не удалось сохранить переписку в браузере.", "Could not save the conversation in this browser."));
+  }, [conversationId, localChatId, messages, recentChats, language, resultsLoaded, mapPlaces, mapRecords, tripPlan, searchArea]);
 
   useEffect(() => {
     const viewport = messagesRef.current;
@@ -383,11 +358,9 @@ export default function AssistantWorkspace() {
     composerRef.current?.focus();
   }
 
-  const draftQuery = draft.trim();
-  const activeQuery = draftQuery || lastSubmittedQuery;
-  const activeSuggestions = activeQuery
-    ? buildPromptSuggestions(activeQuery, draftQuery ? [] : mapRecords, draftQuery ? [] : mapPlaces, language)
-    : starterReplies(language);
+  const activeSuggestions = lastSubmittedQuery
+    ? contextSuggestions({ query: lastSubmittedQuery, places: mapPlaces, records: mapRecords, tripPlan, searchArea }, language)
+    : starterSuggestions(language, localChatId);
   const visibleSuggestions = rotateSuggestions(activeSuggestions, suggestionOffset);
   const activeFilterCount = Number(selectedSourceIds.length > 0) + Number(Boolean(fromDate || toDate));
 
@@ -396,6 +369,17 @@ export default function AssistantWorkspace() {
     if (!requestId || socketRef.current?.readyState !== WebSocket.OPEN) return;
     socketRef.current.send(JSON.stringify({ protocolVersion: 1, type: "turn.cancel", requestId }));
     setProgressLabel(translate(language, "Останавливаю запрос", "Stopping the request"));
+  }
+
+  function showResult(result: ChatResult | null) {
+    setMapPlaces(result?.places ?? []);
+    setMapRecords(result?.records ?? []);
+    setTripPlan(result?.tripPlan ?? null);
+    setSearchArea(result?.searchArea ?? null);
+    setAppliedFilters(result?.appliedFilters ?? []);
+    setResultSources(result?.sources ?? []);
+    setResultsLoaded(Boolean(result));
+    setSelectedResultKey(null);
   }
 
   function startNewConversation() {
@@ -407,14 +391,7 @@ export default function AssistantWorkspace() {
     setMessages([welcomeMessage(language)]);
     setDraft("");
     setSuggestionsExpanded(false);
-    setMapPlaces([]);
-    setMapRecords([]);
-    setTripPlan(null);
-    setSearchArea(null);
-    setSelectedResultKey(null);
-    setResultsLoaded(false);
-    setAppliedFilters([]);
-    setResultSources([]);
+    showResult(null);
     setLastSubmittedQuery("");
     setSuggestionOffset(0);
   }
@@ -426,6 +403,7 @@ export default function AssistantWorkspace() {
       conversationId,
       messages: messages.slice(-100),
       savedAt: Date.now(),
+      result: currentResult,
     };
     setRecentChats((current) => [archived, ...current.filter((chat) => chat.id !== localChatId)]
       .sort((a, b) => b.savedAt - a.savedAt)
@@ -445,15 +423,8 @@ export default function AssistantWorkspace() {
     setLastSubmittedQuery(lastUserMessage(selected.messages));
     setSuggestionsExpanded(false);
     setDraft("");
-    setMapPlaces([]);
-    setMapRecords([]);
-    setTripPlan(null);
-    setSearchArea(null);
-    setSelectedResultKey(null);
-    setResultsLoaded(false);
-    setAppliedFilters([]);
-    setResultSources([]);
-    setLastSubmittedQuery("");
+    showResult(selected.result);
+    setResetViewportRevision((revision) => revision + 1);
     setSuggestionOffset(0);
   }
 
@@ -469,14 +440,7 @@ export default function AssistantWorkspace() {
     setMessages([welcomeMessage(language)]);
     setDraft("");
     setSuggestionsExpanded(false);
-    setMapPlaces([]);
-    setMapRecords([]);
-    setTripPlan(null);
-    setSearchArea(null);
-    setSelectedResultKey(null);
-    setResultsLoaded(false);
-    setAppliedFilters([]);
-    setResultSources([]);
+    showResult(null);
     setLastSubmittedQuery("");
     setSuggestionOffset(0);
     try {
@@ -652,55 +616,6 @@ function joinDraft(base: string, transcript: string): string {
   return `${trimmedBase} ${trimmedTranscript}`;
 }
 
-function readSavedConversation(language: Language): SavedConversation {
-  const empty: SavedConversation = { id: crypto.randomUUID(), conversationId: null, messages: [welcomeMessage(language)], savedAt: Date.now(), recentChats: [] };
-  try {
-    const raw = window.localStorage.getItem(HISTORY_STORAGE_KEY);
-    if (!raw) return empty;
-    const value: unknown = JSON.parse(raw);
-    if (!value || typeof value !== "object") return empty;
-    const saved = value as { id?: unknown; conversationId?: unknown; messages?: unknown; savedAt?: unknown; recentChats?: unknown };
-    if (typeof saved.savedAt !== "number" || Date.now() - saved.savedAt > 30 * 24 * 60 * 60 * 1000) {
-      window.localStorage.removeItem(HISTORY_STORAGE_KEY);
-      return empty;
-    }
-    const recentChats = Array.isArray(saved.recentChats) ? saved.recentChats
-      .filter((chat): chat is Record<string, unknown> => Boolean(chat && typeof chat === "object"))
-      .filter((chat) => typeof chat.id === "string" && typeof chat.savedAt === "number" && Date.now() - chat.savedAt <= 30 * 24 * 60 * 60 * 1000)
-      .map((chat) => ({
-        id: chat.id as string,
-        conversationId: typeof chat.conversationId === "string" && chat.conversationId.length <= 120 ? chat.conversationId : null,
-        messages: readMessages(chat.messages),
-        savedAt: chat.savedAt as number,
-      }))
-      .filter((chat) => chat.messages.some((message) => message.role === "user"))
-      .sort((a, b) => b.savedAt - a.savedAt)
-      .slice(0, 30) : [];
-    const messages = readMessages(saved.messages);
-    return {
-      id: typeof saved.id === "string" && saved.id.length <= 120 ? saved.id : crypto.randomUUID(),
-      conversationId: typeof saved.conversationId === "string" && saved.conversationId.length <= 120 ? saved.conversationId : null,
-      messages: messages.length ? messages : [welcomeMessage(language)],
-      savedAt: saved.savedAt,
-      recentChats,
-    };
-  } catch {
-    return empty;
-  }
-}
-
-function readMessages(value: unknown): Message[] {
-  return Array.isArray(value) ? value.filter((item): item is Message =>
-    Boolean(item && typeof item === "object" && "role" in item && "text" in item)
-    && ((item as Message).role === "user" || (item as Message).role === "assistant")
-    && typeof (item as Message).text === "string",
-  ).slice(-100) : [];
-}
-
-function lastUserMessage(messages: Message[]): string {
-  return [...messages].reverse().find((message) => message.role === "user")?.text ?? "";
-}
-
 function conversationTitle(messages: Message[], language: Language = "en"): string {
   const firstRequest = messages.find((message) => message.role === "user")?.text.trim();
   if (!firstRequest) return translate(language, "Новый запрос", "New chat");
@@ -730,67 +645,6 @@ function localDateBoundary(value: string, endOfDay: boolean): string {
 
 function invalidDateRange(from: string, to: string): boolean {
   return Boolean(from && to && from > to);
-}
-
-function buildPromptSuggestions(query: string, records: RecordView[], places: PlaceView[], language: Language): SuggestedReply[] {
-  const shortQuery = query.replace(/\s+/g, " ").trim().slice(0, 100);
-  const suggestions: SuggestedReply[] = [];
-  if (language === "de") {
-    const firstRecord = records[0];
-    if (firstRecord) {
-      suggestions.push({ label: "Eintragsdetails ansehen", prompt: `Zeige Details zum Eintrag mit der ID ${firstRecord.id}` });
-      suggestions.push({ label: "Ergebnisse zusammenfassen", prompt: `Fasse die gefundenen Daten zu „${shortQuery}“ kurz zusammen.` });
-      suggestions.push({ label: "Suche erweitern", prompt: `Wiederhole „${shortQuery}“ mit breiteren Filtern und erkläre die Änderungen.` });
-    }
-    const firstPlace = places[0];
-    if (firstPlace) {
-      suggestions.push({ label: `Details zu ${firstPlace.name}`, prompt: `Zeige Adresse und Details zu „${firstPlace.name}“, gefunden bei der Suche „${shortQuery}“.` });
-      suggestions.push({ label: `Weitere Orte: ${firstPlace.category ?? "ähnliche Kategorie"}`, prompt: `Finde weitere Orte der Kategorie „${firstPlace.category ?? firstPlace.name}“ zur Anfrage „${shortQuery}“.` });
-      suggestions.push({ label: "Adressen prüfen", prompt: `Prüfe die Adressangaben der Orte aus der Suche „${shortQuery}“.` });
-    }
-    if (!suggestions.length) {
-      suggestions.push({ label: "Suche präzisieren", prompt: `Hilf dabei, die Suche „${shortQuery}“ anhand der verfügbaren Daten zu präzisieren.` });
-      suggestions.push({ label: "Verwandte Orte finden", prompt: `Finde Orte oder Adressen zur Anfrage „${shortQuery}“.` });
-      suggestions.push({ label: "Ergebnis erklären", prompt: `Erkläre, welche Daten zu „${shortQuery}“ verfügbar sind und warum es möglicherweise keine Treffer gibt.` });
-    }
-    return [...new Map(suggestions.map((suggestion) => [suggestion.prompt, suggestion])).values()].slice(0, 4);
-  }
-  const ru = language === "ru";
-  const firstRecord = records[0];
-  if (firstRecord) {
-    suggestions.push({ label: ru ? "Подробнее о найденной записи" : "View record details", prompt: ru ? `Покажи подробности записи с ID ${firstRecord.id}` : `Show details for record ID ${firstRecord.id}` });
-    const category = typeof firstRecord.attributes.category === "string" ? firstRecord.attributes.category : null;
-    suggestions.push(category
-      ? { label: ru ? `Ещё записи: ${category}` : `More records: ${category}`, prompt: ru ? `Найди другие записи категории «${category}», как в запросе «${shortQuery}».` : `Find more records in category “${category}” related to “${shortQuery}”.` }
-      : { label: ru ? "Другие совпадения" : "More matches", prompt: ru ? `Найди другие записи, относящиеся к запросу «${shortQuery}».` : `Find other records related to “${shortQuery}”.` });
-    suggestions.push({ label: ru ? "Кратко подвести итог" : "Summarize results", prompt: ru ? `Кратко подведи итог найденным данным по запросу «${shortQuery}».` : `Briefly summarize the data found for “${shortQuery}”.` });
-    suggestions.push({ label: ru ? "Расширить поиск" : "Broaden the search", prompt: ru ? `Повтори поиск «${shortQuery}» с более широкими условиями и укажи, что изменилось.` : `Repeat “${shortQuery}” with broader filters and explain what changed.` });
-  }
-  const firstPlace = places[0];
-  if (firstPlace) {
-    suggestions.push({
-      label: ru ? `Подробнее о месте: ${firstPlace.name}` : `View place details: ${firstPlace.name}`,
-      prompt: ru ? `Покажи адрес и подробности места «${firstPlace.name}», найденного по запросу «${shortQuery}».` : `Show the address and details for “${firstPlace.name}”, found for “${shortQuery}”.`,
-    });
-    suggestions.push(firstPlace.category
-      ? { label: ru ? `Ещё места: ${firstPlace.category}` : `More places: ${firstPlace.category}`, prompt: ru ? `Найди другие места категории «${firstPlace.category}», связанные с запросом «${shortQuery}».` : `Find other places in category “${firstPlace.category}” related to “${shortQuery}”.` }
-      : { label: ru ? "Похожие места" : "Similar places", prompt: ru ? `Найди другие места, похожие на «${firstPlace.name}», в данных для запроса «${shortQuery}».` : `Find places similar to “${firstPlace.name}” in the data for “${shortQuery}”.` });
-    suggestions.push({ label: ru ? "Проверить адреса" : "Check addresses", prompt: ru ? `Проверь адресные сведения для найденных по запросу «${shortQuery}» мест.` : `Check the address details for places found for “${shortQuery}”.` });
-    suggestions.push({ label: ru ? "Расширить поиск" : "Broaden the search", prompt: ru ? `Повтори поиск «${shortQuery}» с более широкой областью и укажи, что изменилось.` : `Repeat “${shortQuery}” in a broader area and explain what changed.` });
-  }
-  if (!suggestions.length) {
-    suggestions.push({ label: ru ? "Уточнить этот поиск" : "Refine this search", prompt: ru ? `Помоги уточнить поиск по запросу «${shortQuery}» с учётом доступных данных.` : `Help refine the search “${shortQuery}” using the available data.` });
-    suggestions.push({ label: ru ? "Изменить условия поиска" : "Change search filters", prompt: ru ? `Повтори запрос «${shortQuery}» с более широкими условиями и объясни, какие условия изменил.` : `Repeat “${shortQuery}” with broader filters and explain which filters changed.` });
-    suggestions.push({ label: ru ? "Проверить связанные места" : "Find related places", prompt: ru ? `Найди места или адреса, связанные с запросом «${shortQuery}».` : `Find places or addresses related to “${shortQuery}”.` });
-    suggestions.push({ label: ru ? "Пояснить результат" : "Explain the result", prompt: ru ? `Объясни, какие данные доступны для запроса «${shortQuery}» и почему совпадений могло не быть.` : `Explain which data is available for “${shortQuery}” and why it might have no matches.` });
-  }
-  return [...new Map(suggestions.map((suggestion) => [suggestion.prompt, suggestion])).values()].slice(0, 4);
-}
-
-function rotateSuggestions(suggestions: SuggestedReply[], offset: number): SuggestedReply[] {
-  if (suggestions.length <= 2) return suggestions;
-  const start = offset % suggestions.length;
-  return [suggestions[start]!, suggestions[(start + 1) % suggestions.length]!];
 }
 
 function formatAppliedFilters(filters: Array<Record<string, unknown>>, sources: SourceView[], language: Language): string[] {
