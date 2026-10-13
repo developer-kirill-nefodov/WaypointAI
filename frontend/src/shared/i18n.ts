@@ -2,13 +2,37 @@ export type Language = "en" | "ru" | "de";
 
 export const LANGUAGE_STORAGE_KEY = "waypoint-ai:language:v1";
 
+const LANGUAGE_COOKIE = "waypoint_language";
+const LANGUAGE_COOKIE_MAX_AGE_SECONDS = 365 * 24 * 60 * 60;
+
+function asLanguage(value: string | null | undefined): Language | null {
+  return value === "en" || value === "ru" || value === "de" ? value : null;
+}
+
+/**
+ * The user's choice from browser storage, then the cookie copy (it survives some storage clean-ups),
+ * then the browser's preferred languages; English when none of them is supported.
+ */
 export function readLanguage(): Language {
   try {
-    const saved = window.localStorage.getItem(LANGUAGE_STORAGE_KEY);
-    return saved === "ru" || saved === "de" ? saved : "en";
-  } catch {
-    return "en";
+    const stored = asLanguage(window.localStorage.getItem(LANGUAGE_STORAGE_KEY));
+    if (stored) return stored;
+  } catch { /* Storage can be blocked; fall through to the cookie. */ }
+  const cookie = document.cookie.split("; ").find((entry) => entry.startsWith(`${LANGUAGE_COOKIE}=`))?.split("=")[1];
+  const fromCookie = asLanguage(cookie);
+  if (fromCookie) return fromCookie;
+  for (const preferred of navigator.languages ?? [navigator.language]) {
+    const language = asLanguage(preferred?.slice(0, 2).toLowerCase());
+    if (language) return language;
   }
+  return "en";
+}
+
+/** Saves the choice in browser storage and a first-party cookie, and marks the document language. */
+export function saveLanguage(language: Language): void {
+  document.documentElement.lang = language;
+  try { window.localStorage.setItem(LANGUAGE_STORAGE_KEY, language); } catch { /* Best-effort in private browsing; the cookie remains. */ }
+  document.cookie = `${LANGUAGE_COOKIE}=${language}; Max-Age=${LANGUAGE_COOKIE_MAX_AGE_SECONDS}; Path=/; SameSite=Lax`;
 }
 
 const germanTranslations: Record<string, string> = {

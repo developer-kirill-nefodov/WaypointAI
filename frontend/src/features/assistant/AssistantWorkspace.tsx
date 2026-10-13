@@ -4,7 +4,7 @@ import type { PlaceView, RecordView, Scope, ServerFrame, SourceView, TripPlan, S
 import MapPanel from "../../widgets/map/MapPanel";
 import { clearAssistantHistory, loadCapabilities, loadDataSources, type Capabilities, type ConnectionState } from "../../shared/api/client";
 import { createAssistantConnection, type AssistantConnection, type ReconnectInfo } from "../../shared/api/assistantSocket";
-import { readLanguage, translate, type Language, LANGUAGE_STORAGE_KEY } from "../../shared/i18n";
+import { readLanguage, saveLanguage, translate, type Language } from "../../shared/i18n";
 import ModelInfoPage from "./ModelInfoPage";
 import HomeDashboard from "./HomeDashboard";
 import Logo from "../../shared/ui/Logo";
@@ -242,7 +242,7 @@ export default function AssistantWorkspace() {
   }, [pending]);
 
   useEffect(() => {
-    try { window.localStorage.setItem(LANGUAGE_STORAGE_KEY, language); } catch { /* Language preference is best-effort in private browsing. */ }
+    saveLanguage(language);
   }, [language]);
 
   useEffect(() => {
