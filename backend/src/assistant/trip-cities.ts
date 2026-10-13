@@ -1,6 +1,7 @@
 import type { ResolvedPlace } from "../data/settlement.repository.js";
 import { parseTripDuration } from "./trip-clarification.js";
 
+const MAX_CITY_CANDIDATES = 8;
 export const MAX_TRIP_CITIES = 5;
 const MAX_TRIP_DAYS = 7;
 const DAY_COUNT_WINDOW = 28;
@@ -100,11 +101,14 @@ export async function resolveTripCities(
 ): Promise<TripCity[]> {
   const cities = new Map<string, TripCity>();
   const covered: Array<[number, number]> = [];
-  for (const candidate of extractCityCandidates(text)) {
+  // Every candidate is a database lookup, so their number is capped and they are resolved in parallel.
+  const candidates = extractCityCandidates(text).slice(0, MAX_CITY_CANDIDATES);
+  const places = await Promise.all(candidates.map((candidate) => resolveSettlement(candidate.name)));
+  for (const [index, candidate] of candidates.entries()) {
     if (cities.size >= MAX_TRIP_CITIES) break;
     // Skip words inside a phrase that already resolved ("Ascoli" after "Ascoli Piceno").
     if (covered.some(([start, end]) => candidate.index >= start && candidate.index < end)) continue;
-    const place = await resolveSettlement(candidate.name);
+    const place = places[index];
     if (!place) continue;
     const settlementType = place.category === "place:city" || place.category === "place:town";
     if (!candidate.viaExonym && (!settlementType || place.match === "approximate")) continue;
@@ -163,20 +167,26 @@ function explicitDaysNear(text: string, city: Pick<TripCity, "mentionIndex" | "m
   const before = text.slice(Math.max(0, city.mentionIndex - DAY_COUNT_WINDOW), city.mentionIndex);
   const after = text.slice(city.mentionIndex + city.mentionLength, city.mentionIndex + city.mentionLength + DAY_COUNT_WINDOW);
   // "2 days in Roma" / "2 дня в Риме": the count ends right before the city and its preposition.
-  const beforeMatch = /((?:\d|один|одна|два|двух|три|трёх|трех|четыре|пять|шесть|семь|one|two|three|four|five|six|seven|ein|zwei|drei|vier|fünf|sechs|sieben)\s*[- ]?\s*(?:день|дня|дней|days?|tage?n?)?)\s*(?:in|в|во|nach|at|to|im|для)?\s*$/iu.exec(before);
+  const beforeMatch = /(?<![\p{L}\d])((?:\d{1,2}|один|одна|два|двух|три|трёх|трех|четыре|пять|шесть|семь|one|two|three|four|five|six|seven|ein|zwei|drei|vier|fünf|sechs|sieben)\s*[- ]?\s*(?:день|дня|дней|days?|tage?n?)?)\s*(?:in|в|во|nach|at|to|im|для)?\s*$/iu.exec(before);
   if (beforeMatch) {
     const phrase = beforeMatch[1]!.trim();
     // A bare number ("и 3 во Флоренции") counts only when the message talks about days elsewhere.
-    if (/^\d$/.test(phrase) && /\d\s*[- ]?\s*(?:день|дня|дней|days?|tage?n?)/iu.test(text)) {
+    if (/^\d{1,2}$/.test(phrase) && /\d\s*[- ]?\s*(?:день|дня|дней|days?|tage?n?)/iu.test(text)) {
       return { days: Math.min(MAX_TRIP_DAYS, Number(phrase)), position: "before" };
     }
-    const parsed = parseTripDuration(phrase);
+    const parsed = parseTripDuration(phrase) ?? cappedDayCount(phrase);
     if (parsed !== null) return { days: parsed, position: "before" };
   }
   // "Roma for 2 days" / "в Риме 2 дня": the count follows the city before the next separator.
   const afterClause = after.split(/[,;.]|\s(?:and|и|und|then|потом|затем|dann)\s/iu)[0] ?? "";
-  const parsed = parseTripDuration(afterClause);
+  const parsed = parseTripDuration(afterClause) ?? cappedDayCount(afterClause);
   return parsed === null ? null : { days: parsed, position: "after" };
+}
+
+/** "12 days": a count above the supported range is capped, not misread as its last digit. */
+function cappedDayCount(phrase: string): number | null {
+  const digits = /(?<!\d)(\d{1,2})\s*[- ]?\s*(?:день|дня|дней|days?|tage?n?)/iu.exec(phrase);
+  return digits ? Math.max(1, Math.min(MAX_TRIP_DAYS, Number(digits[1]))) : null;
 }
 
 function sum(values: number[]): number {
@@ -191,10 +201,16 @@ export async function resolveLatestTripCities(
   messages: string[],
   resolveSettlement: (name: string) => Promise<ResolvedPlace | null>,
 ): Promise<{ cities: TripCity[]; text: string }> {
+  // One turn looks up the same names several times; resolve each name once.
+  const cache = new Map<string, Promise<ResolvedPlace | null>>();
+  const cached = (name: string) => {
+    if (!cache.has(name)) cache.set(name, resolveSettlement(name));
+    return cache.get(name)!;
+  };
   for (let index = messages.length - 1; index >= 0; index -= 1) {
-    if (!(await resolveTripCities(messages[index]!, resolveSettlement)).length) continue;
+    if (!(await resolveTripCities(messages[index]!, cached)).length) continue;
     const text = messages.slice(index).join("\n");
-    return { cities: await resolveTripCities(text, resolveSettlement), text };
+    return { cities: await resolveTripCities(text, cached), text };
   }
   return { cities: [], text: messages.join("\n") };
 }

@@ -78,3 +78,17 @@ test("builds consecutive days per city from places found around each center", as
   assert.equal(plan.totalDays, 3);
   assert.ok(plan.days.every((day) => day.stopPlaceIds.length >= 2 && day.routeStatus === "pending"));
 });
+
+test("reads two-digit day counts and caps them instead of keeping the last digit", () => {
+  const text = "12 days in Roma";
+  assert.deepEqual(allocateTripDays(text, at(text, ["Roma"]), null), [7]);
+  const mixed = "Roma 12 days, Firenze";
+  assert.equal(allocateTripDays(mixed, at(mixed, ["Roma", "Firenze"]), null).reduce((sum, days) => sum + days, 0), 7);
+});
+
+test("looks up each candidate name once per turn", async () => {
+  const calls = [];
+  const counting = async (name) => { calls.push(name); return settlements[name] ?? null; };
+  await resolveLatestTripCities(["Rome and Florence for 5 days", "by car"], counting);
+  assert.equal(calls.filter((name) => name === "Rome").length, 1);
+});
