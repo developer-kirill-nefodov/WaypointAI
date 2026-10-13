@@ -2,7 +2,7 @@ import { SEARCH_LIMITS } from "../config/search-limits.js";
 import type { EventSearchInput } from "../data/investigation.repository.js";
 import type { ResolvedPlace } from "../data/settlement.repository.js";
 import { HOUR_MS } from "../services/time.js";
-import type { SearchEventsArgs } from "../tools/search-events.js";
+import { searchEventsArgsSchema, type SearchEventsArgs } from "../tools/search-events.js";
 import { interpretWithRules } from "./investigation-rules.js";
 
 /** Shared by the investigation query endpoint and the chat assistant's search_events tool. */
@@ -85,10 +85,13 @@ export function buildEventSearch(args: SearchEventsArgs, center: GeoPoint | null
 export function complementFromText(args: SearchEventsArgs, text: string): SearchEventsArgs {
   const stated = interpretWithRules(text);
   if (!stated) return args;
-  return {
+  const merged = {
     ...args,
     ...(args.radiusKm === undefined && stated.radiusKm !== undefined && /\d\s*(?:km|км|kilomet)/i.test(text) ? { radiusKm: stated.radiusKm } : {}),
     ...(args.hours === undefined && stated.hours !== undefined ? { hours: stated.hours } : {}),
     ...(args.minMagnitude === undefined && stated.minMagnitude !== undefined ? { minMagnitude: stated.minMagnitude } : {}),
   };
+  // The merge can break a cross-field rule (a filled minimum above the model's maximum); keep the model's call then.
+  const checked = searchEventsArgsSchema.safeParse(merged);
+  return checked.success ? checked.data : args;
 }

@@ -51,6 +51,7 @@ test("searches around a resolved settlement and returns the area for the map", a
     placeDescription: "Synthetic event",
     synthetic: true,
     distanceKm: 1.2,
+    directionFromCenter: "NE",
   });
   assert.equal(result.content.syntheticEventsOnThisPage, 1);
   assert.deepEqual(ctx.searches[0].near, { lat: 42.79, lon: 13.09, radiusMeters: 30_000 });
@@ -103,4 +104,28 @@ test("fills an explicit radius or period the model left out, but keeps the model
   assert.equal(kept.searchArea.radiusKm, 40);
   const noRadius = await executeSearchEventsTool({ place: "Testville" }, { ...ctx.value, userText: "earthquakes near Testville" });
   assert.equal(noRadius.searchArea.radiusKm, 25);
+});
+
+test("the chat category filter applies to event searches", async () => {
+  const ctx = context({ scope: { filters: { category: "seismic:earthquake" } } });
+  await executeSearchEventsTool({ hours: 24 }, ctx.value);
+  assert.equal(ctx.searches[0].category, "seismic:earthquake");
+});
+
+test("tells the model when its event list is a sample and gives the range over all matches", async () => {
+  const ctx = context();
+  ctx.value.deps.searchEvents = async () => ({ total: 68, events: [event], nextCursor: null, magnitudeRange: { min: 0.2, max: 2 } });
+  const result = await executeSearchEventsTool({ hours: 24 }, ctx.value);
+  assert.deepEqual(result.content.magnitudeRangeOfAllMatches, { min: 0.2, max: 2 });
+  assert.match(result.content.eventsBelowAreASample, /of 68 matches/);
+  const small = await executeSearchEventsTool({ hours: 24 }, context().value);
+  assert.equal(small.content.eventsBelowAreASample, false);
+});
+
+test("computes the compass direction from the search center for the model", async () => {
+  const { compassDirection } = await import("../src/tools/search-events-tool.ts");
+  const perugia = { lat: 43.11, lon: 12.39 };
+  assert.equal(compassDirection(perugia, { lat: 42.83, lon: 12.99 }), "SE");
+  assert.equal(compassDirection(perugia, { lat: 43.5, lon: 12.39 }), "N");
+  assert.equal(compassDirection(perugia, { lat: 43.11, lon: 11.9 }), "W");
 });

@@ -156,3 +156,10 @@ test("recognizes regions case-insensitively, including multi-word names", async 
   const outcome = await runInvestigationQuery(query("Earthquakes near Testville"), d);
   assert.equal(outcome.interpretation.ignoredPlace, undefined);
 });
+
+test("keeps the model's arguments when a value filled from the text would break the magnitude range", async () => {
+  const { complementFromText } = await import("../src/assistant/event-search.ts");
+  const args = complementFromText({ place: "Norcia", maxMagnitude: 3 }, "M4+ earthquakes near Norcia within 20 km");
+  assert.deepEqual(args, { place: "Norcia", maxMagnitude: 3 });
+  assert.equal(complementFromText({ place: "Norcia" }, "M2+ near Norcia within 20 km").minMagnitude, 2);
+});

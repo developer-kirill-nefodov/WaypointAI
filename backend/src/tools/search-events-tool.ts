@@ -69,7 +69,12 @@ export async function executeSearchEventsTool(rawArgs: unknown, context: SearchE
         ...(search.minMagnitude !== undefined ? { minMagnitude: search.minMagnitude } : {}),
         ...(search.maxMagnitude !== undefined ? { maxMagnitude: search.maxMagnitude } : {}),
       },
+      ...(result.magnitudeRange ? { magnitudeRangeOfAllMatches: result.magnitudeRange } : {}),
       syntheticEventsOnThisPage: result.events.filter((event) => isSynthetic(event.sourceId)).length,
+      // The model sees a few rows; it must not describe them as the whole result.
+      eventsBelowAreASample: result.total > EVENTS_FOR_MODEL
+        ? `Only the ${EVENTS_FOR_MODEL} most recent of ${result.total} matches are listed. Use total and magnitudeRangeOfAllMatches for the whole result.`
+        : false,
       events: result.events.slice(0, EVENTS_FOR_MODEL).map((event) => ({
         id: event.id,
         sourceId: event.sourceId,
@@ -78,6 +83,7 @@ export async function executeSearchEventsTool(rawArgs: unknown, context: SearchE
         placeDescription: event.attributes.placeDescription ?? event.label,
         ...(isSynthetic(event.sourceId) ? { synthetic: true } : {}),
         ...(event.distanceMeters !== undefined ? { distanceKm: Math.round(event.distanceMeters / 100) / 10 } : {}),
+        ...(search.near ? { directionFromCenter: compassDirection(search.near, event) } : {}),
       })),
     },
     records: result.events,
@@ -87,8 +93,9 @@ export async function executeSearchEventsTool(rawArgs: unknown, context: SearchE
   };
 }
 
-/** The chat's selected sources and date range always win over what the model asked for. */
-function narrowToScope<T extends { from: Date; to: Date; sourceIds?: string[] }>(search: T, context: SearchEventsToolContext): T {
+/** The chat's selected sources, date range, and category filter always win over what the model asked for. */
+function narrowToScope<T extends { from: Date; to: Date; sourceIds?: string[]; category?: string }>(search: T, context: SearchEventsToolContext): T {
+  const scopeCategory = typeof context.scope.filters?.category === "string" ? context.scope.filters.category.slice(0, 120) : undefined;
   const scopeFrom = context.scope.dateRange?.from ? new Date(context.scope.dateRange.from) : null;
   const scopeTo = context.scope.dateRange?.to ? new Date(context.scope.dateRange.to) : null;
   return {
@@ -96,6 +103,19 @@ function narrowToScope<T extends { from: Date; to: Date; sourceIds?: string[] }>
     from: scopeFrom && scopeFrom > search.from ? scopeFrom : search.from,
     to: scopeTo && scopeTo < search.to ? scopeTo : search.to,
     ...(context.sourceIds?.length ? { sourceIds: context.sourceIds } : {}),
+    ...(scopeCategory ? { category: scopeCategory } : {}),
   };
 }
 
+const COMPASS = ["N", "NE", "E", "SE", "S", "SW", "W", "NW"] as const;
+
+/** Eight-point compass direction from the search center, computed here so the model never guesses it. */
+export function compassDirection(from: GeoPoint, to: GeoPoint): (typeof COMPASS)[number] {
+  const radians = Math.PI / 180;
+  const deltaLon = (to.lon - from.lon) * radians;
+  const y = Math.sin(deltaLon) * Math.cos(to.lat * radians);
+  const x = Math.cos(from.lat * radians) * Math.sin(to.lat * radians)
+    - Math.sin(from.lat * radians) * Math.cos(to.lat * radians) * Math.cos(deltaLon);
+  const bearing = (Math.atan2(y, x) / radians + 360) % 360;
+  return COMPASS[Math.round(bearing / 45) % 8]!;
+}

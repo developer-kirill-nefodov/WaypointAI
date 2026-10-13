@@ -187,6 +187,8 @@ test("searches by window, exact radius, and numeric magnitude without failing on
   const near = await modules.repo.searchEvents({ ...window, near: { lat: 42.0, lon: 13.0, radiusMeters: 10_000 }, limit: 50 });
   assert.deepEqual(near.events.map((item) => item.id).sort(), ["center", "inside", "weird"]);
   assert.equal(near.events.find((item) => item.id === "inside").distanceMeters, 8896);
+  // The range covers every match and skips the non-numeric magnitude.
+  assert.deepEqual(near.magnitudeRange, { min: 1.2, max: 3.1 });
 
   const strong = await modules.repo.searchEvents({ ...window, minMagnitude: 2, limit: 50 });
   assert.deepEqual(strong.events.map((item) => item.id), ["corner", "center"]);

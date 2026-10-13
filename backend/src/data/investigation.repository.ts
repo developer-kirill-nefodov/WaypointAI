@@ -38,6 +38,8 @@ export interface EventSearchResult {
   total: number;
   events: EventView[];
   nextCursor: EventCursor | null;
+  /** Smallest and largest magnitude over every match, not only this page; null when no match has one. */
+  magnitudeRange?: { min: number; max: number } | null;
 }
 
 export interface SyncSummary {
@@ -115,7 +117,11 @@ export async function searchEvents(input: EventSearchInput): Promise<EventSearch
   const limitParam = param(input.limit + 1);
 
   const [[countRows], [rows]] = await Promise.all([
-    database.query(`SELECT count(*)::integer AS total FROM records r WHERE ${where}`, { bind: countBind }),
+    database.query(
+      `SELECT count(*)::integer AS total, min(${MAGNITUDE_SQL}) AS min_magnitude, max(${MAGNITUDE_SQL}) AS max_magnitude
+       FROM records r WHERE ${where}`,
+      { bind: countBind },
+    ),
     database.query(
       `SELECT r.id, r.source_id, r.observed_at, r.lat, r.lon, r.accuracy_meters, r.category, r.attributes,
          ${filter.distanceSql} AS distance_meters
@@ -131,8 +137,12 @@ export async function searchEvents(input: EventSearchInput): Promise<EventSearch
   const page = eventRows.slice(0, input.limit).map(rowToEventView);
   const last = page.at(-1);
   const hasMore = eventRows.length > input.limit;
+  const summary = (countRows as Array<{ total: number; min_magnitude: number | null; max_magnitude: number | null }>)[0];
   return {
-    total: Number((countRows as Array<{ total: number }>)[0]?.total ?? 0),
+    total: Number(summary?.total ?? 0),
+    magnitudeRange: summary?.min_magnitude == null || summary.max_magnitude == null
+      ? null
+      : { min: Number(summary.min_magnitude), max: Number(summary.max_magnitude) },
     events: page,
     nextCursor: hasMore && last ? { observedAt: new Date(last.observedAt), id: last.id } : null,
   };
