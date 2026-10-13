@@ -12,8 +12,13 @@ export const DEFAULT_IMPORT_DAYS = 7;
 export const MAX_IMPORT_DAYS = 30;
 const MAX_WINDOW_SPLIT_DEPTH = 6;
 const MIN_SPLIT_WINDOW_MS = HOUR_MS;
-/** A running import older than this is treated as crashed so it cannot block the source forever. */
-const STALE_RUN_MS = 30 * 60 * 1000;
+/** Hard limit for the fetch phase; window splits and retries cannot keep a run open longer than this. */
+export const IMPORT_FETCH_DEADLINE_MS = 15 * 60 * 1000;
+/**
+ * A running import older than this is treated as crashed so it cannot block the source forever.
+ * It exceeds the fetch deadline plus the database writes, so a live run is never released.
+ */
+export const STALE_RUN_MS = 30 * 60 * 1000;
 
 export interface RunCounts {
   fetched: number;
@@ -115,7 +120,12 @@ export async function importEvents(input: ImportEventsInput): Promise<ImportSumm
   const counts: RunCounts = { fetched: 0, inserted: 0, updated: 0, skipped: 0 };
   try {
     // Fetch everything before writing, so an upstream failure leaves stored data untouched.
-    const fetched = await fetchWindow(input.adapter, window, 0, input.signal);
+    const deadline = AbortSignal.timeout(IMPORT_FETCH_DEADLINE_MS);
+    const fetchSignal = input.signal ? AbortSignal.any([input.signal, deadline]) : deadline;
+    const fetched = await fetchWindow(input.adapter, window, 0, fetchSignal).catch((error: unknown) => {
+      if (deadline.aborted && !input.signal?.aborted) throw new SourceFetchError("upstream_timeout", true);
+      throw error;
+    });
     const events = dedupeByExternalId(fetched.events);
     counts.fetched = events.length;
     counts.skipped = fetched.skipped;

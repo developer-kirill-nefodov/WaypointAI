@@ -15,7 +15,7 @@ import { chat } from "./llm/ollama.provider.js";
 import { releaseInference, tryAcquireInference } from "./llm/inference-gate.js";
 import { getSources } from "./data/record.repository.js";
 import { failInterruptedRuns, sqlEventImportStore } from "./data/event-import.repository.js";
-import { importEvents, startBackgroundImport } from "./services/event-import.js";
+import { importEvents, STALE_RUN_MS, startBackgroundImport } from "./services/event-import.js";
 import { createEventSourceAdapter } from "./sources/registry.js";
 
 const app = express();
@@ -53,7 +53,7 @@ const closeWebSockets = attachWebSocket(server);
 server.listen(env.API_PORT, env.API_HOST, () => {
   console.log(`Waypoint AI API listening on http://${env.API_HOST}:${env.API_PORT}`);
   void database.authenticate()
-    .then(() => failInterruptedRuns())
+    .then(() => failInterruptedRuns(STALE_RUN_MS))
     .then((count) => { if (count) console.warn("Marked interrupted event imports as failed", { count }); })
     .catch(() => console.warn("PostgreSQL is not available yet; start it and apply migrations."));
 });

@@ -202,12 +202,15 @@ CROSS JOIN LATERAL (
 WHERE r.id = ANY($1::varchar[])
 RETURNING record_id`;
 
-/** Runs left "running" by a previous process cannot still be active; release them at startup. */
-export async function failInterruptedRuns(): Promise<number> {
+/**
+ * Releases runs left "running" by a crashed process at startup. Only runs older than the stale limit are
+ * touched: a CLI import running next to the API is still active and must not be marked failed.
+ */
+export async function failInterruptedRuns(staleAfterMs: number): Promise<number> {
   await database.authenticate();
   const [count] = await SourceSyncRun.update(
     { status: "failed", errorCode: "interrupted", finishedAt: new Date() },
-    { where: { status: "running" } },
+    { where: { status: "running", startedAt: { [Op.lt]: new Date(Date.now() - staleAfterMs) } } },
   );
   return count;
 }

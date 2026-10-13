@@ -215,3 +215,15 @@ test("accepts only allowlisted HTTPS hosts for the event source URL", async () =
   assert.equal(isAllowedEventSourceUrl("https://169.254.169.254/latest/meta-data"), false);
   assert.equal(isAllowedEventSourceUrl("not a url"), false);
 });
+
+test("rejects a response body above the size limit without retrying", async () => {
+  let calls = 0;
+  const fetchImpl = async () => { calls += 1; return new Response("x".repeat(2048), { status: 200 }); };
+  await assert.rejects(
+    fetchWithRetry(new URL("https://example.test/events"), { timeoutMs: 1000, userAgent: "test", fetchImpl, maxBodyBytes: 1024, sleep: async () => {} }),
+    (error) => error.code === "upstream_malformed" && error.retryable === false,
+  );
+  assert.equal(calls, 1);
+  const ok = await fetchWithRetry(new URL("https://example.test/events"), { timeoutMs: 1000, userAgent: "test", fetchImpl, maxBodyBytes: 4096 });
+  assert.equal(ok.body.length, 2048);
+});

@@ -10,9 +10,14 @@ export interface FetchWithRetryOptions {
   fetchImpl?: typeof fetch;
   sleep?: (milliseconds: number) => Promise<void>;
   random?: () => number;
+  /** Larger bodies are rejected as malformed instead of being buffered; defaults to 20 MB. */
+  maxBodyBytes?: number;
 }
 
 const RETRYABLE_STATUSES = new Set([429, 500, 502, 503, 504]);
+const DEFAULT_MAX_BODY_BYTES = 20 * 1024 * 1024;
+
+class BodyTooLargeError extends Error {}
 
 export interface FetchedBody {
   status: number;
@@ -46,8 +51,9 @@ export async function fetchWithRetry(url: URL, options: FetchWithRetryOptions): 
         redirect: "error",
         headers: { accept: "application/json", "user-agent": options.userAgent },
       });
-      if (response.ok) body = response.status === 204 ? "" : await response.text();
+      if (response.ok) body = response.status === 204 ? "" : await readLimitedText(response, options.maxBodyBytes ?? DEFAULT_MAX_BODY_BYTES);
     } catch (error) {
+      if (error instanceof BodyTooLargeError) throw new SourceFetchError("upstream_malformed", false);
       if (options.signal?.aborted) throw error;
       lastError = timeout.aborted
         ? new SourceFetchError("upstream_timeout", true)
@@ -66,6 +72,31 @@ export async function fetchWithRetry(url: URL, options: FetchWithRetryOptions): 
     }
   }
   throw lastError;
+}
+
+/** Reads the body as UTF-8 text and stops as soon as it exceeds the limit. */
+async function readLimitedText(response: Response, maxBytes: number): Promise<string> {
+  const declared = Number(response.headers.get("content-length"));
+  if (Number.isFinite(declared) && declared > maxBytes) {
+    await response.body?.cancel();
+    throw new BodyTooLargeError();
+  }
+  if (!response.body) return "";
+  const reader = response.body.getReader();
+  const decoder = new TextDecoder();
+  let received = 0;
+  let text = "";
+  for (;;) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    received += value.byteLength;
+    if (received > maxBytes) {
+      await reader.cancel();
+      throw new BodyTooLargeError();
+    }
+    text += decoder.decode(value, { stream: true });
+  }
+  return text + decoder.decode();
 }
 
 function defaultSleep(milliseconds: number): Promise<void> {
