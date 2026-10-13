@@ -86,3 +86,5 @@ The browser never connects to OpenAI and never receives the API key.
 - Do not show stack traces, filesystem paths, or provider internals in user-facing errors.
 - Support keyboard use and text status in addition to color.
 - Request open driving trips from OSRM with the supported `roundtrip=false`, `source=first`, `destination=last` combination. A route line is rendered only when the backend returns valid road geometry; if the provider is unavailable, keep the verified stops visible and offer a retry.
+
+Chat history lives in browser storage (`features/assistant/chat-storage.ts`): each conversation keeps its messages and the map result of its last completed turn, so reloading the page or reopening a recent chat restores its places, trip plan, and search radius. Follow-up suggestions (`features/assistant/suggestions.ts`) are built from that result: trip plans offer longer, shorter, single-city, or route-free variants; event searches offer a wider radius, a magnitude or period filter, and the strongest event; place results offer a day route and related searches. A new chat shows starter prompts shuffled per chat.
