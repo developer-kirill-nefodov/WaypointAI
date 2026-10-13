@@ -19,12 +19,16 @@ read_env_flag() {
   fi
   [[ "$value" == "1" || "$value" == "true" ]]
 }
+# Read both flags before clearing them, so a value passed in the environment is not lost.
+vulkan=0; igpu=0
+read_env_flag OLLAMA_VULKAN && vulkan=1
+read_env_flag OLLAMA_IGPU_ENABLE && igpu=1
 unset OLLAMA_VULKAN OLLAMA_IGPU_ENABLE
-if read_env_flag OLLAMA_VULKAN; then
+if [[ "$vulkan" == "1" ]]; then
   export OLLAMA_VULKAN=1
   echo "Vulkan GPU offload is enabled."
 fi
-if read_env_flag OLLAMA_IGPU_ENABLE; then
+if [[ "$igpu" == "1" ]]; then
   export OLLAMA_IGPU_ENABLE=1
 fi
 
