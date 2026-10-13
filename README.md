@@ -1,8 +1,8 @@
 # Waypoint AI
 
-Waypoint AI is a self-hosted geospatial assistant demo. It turns natural-language place and itinerary requests into verified backend searches, then connects the returned places to map highlights and routes.
+Waypoint AI is a self-hosted geospatial assistant demo. A local LLM turns natural-language requests into validated, read-only backend searches: places from OpenStreetMap, multi-city itineraries with road routes, and public earthquake events by place, radius, and period. Every name, coordinate, and route on the map comes from the database or the routing service, not from the model.
 
-![Waypoint AI showing verified Berlin places and a generated route](docs/media/waypoint-ai-route-chat.png)
+![Waypoint AI: the chat finds earthquakes within 60 km of Perugia and draws the search radius on the map](docs/media/waypoint-ai-route-chat.png)
 
 [![CI](https://github.com/developer-kirill-nefodov/WaypointAI/actions/workflows/ci.yml/badge.svg)](https://github.com/developer-kirill-nefodov/WaypointAI/actions/workflows/ci.yml)
 
@@ -14,13 +14,14 @@ The model runs through a locally managed Ollama service. It can request a small 
 
 ## What the demo shows
 
-- English, Russian, and German assistant interactions.
-- Local inference with an explicit model lifecycle and configurable resource limits.
+- English, Russian, and German assistant interactions over WebSocket, with streamed tool progress and automatic reconnection.
+- Local inference through Ollama with five allowlisted, read-only tools: `search_places`, `search_records`, `get_record_details`, `list_sources`, and `search_events`. The server validates every tool call with Zod.
 - Search over imported OpenStreetMap places and clear source coverage metadata.
-- Deterministic itinerary stops built from verified place rows, with a route displayed when the configured route service returns one.
+- Deterministic itineraries for 1–7 days across up to five cities ("Rome and Florence for 5 days"): stops come from verified place rows, each day gets its own road route, and each city's visited area is outlined on the map.
+- Event search from the chat: "earthquakes within 60 km of Perugia this month" resolves the settlement on the server, runs a bounded radius query, and draws the circle on the map.
 - Explicit empty, clarification, model-unavailable, and route-unavailable states.
 - Optional live voice dictation (demo, disabled by default). See [Voice input](#voice-input-demo-opt-in).
-- An investigation workspace for public event data: imported INGV earthquakes linked to nearby OSM places, a bounded REST API, and natural-language queries in which the model only fills in validated search filters. See [Investigation workspace](#investigation-workspace-demo).
+- An investigation workspace for public event data: imported INGV earthquakes linked to nearby OSM places, a bounded REST API with keyset pagination, event details in a modal, and natural-language queries in which the model only fills in validated search filters, with a rule-based fallback. See [Investigation workspace](#investigation-workspace-demo).
 
 The included OpenStreetMap extracts cover selected regions in Germany, Poland, Romania, France, Italy, and Spain; coverage is not complete in every country. Event records are imported on demand from INGV; an optional synthetic event set for offline demos is clearly labelled.
 
