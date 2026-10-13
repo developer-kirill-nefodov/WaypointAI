@@ -216,7 +216,7 @@ Content-Type: application/json
 ## 10. Likely review questions
 
 **1. Why REST for the query instead of the existing WebSocket chat?**
-The investigation page needs one structured result: interpretation, applied filters, and rows. A request/response endpoint fits that and is easy to test. The chat keeps its streaming protocol. `search_events` is not added to chat yet, so the WebSocket contract is unchanged.
+The investigation page needs one structured result: interpretation, applied filters, and rows. A request/response endpoint fits that and is easy to test. The chat keeps its streaming protocol and uses the same `search_events` tool: on "Map and chat" the model can search events by place, radius, period, and magnitude, and the chat map draws the same radius circle from `turn.completed.result.searchArea`.
 
 **2. How do you prevent duplicate events?**
 Each event's ID is `<sourceId>:<externalId>`, and (`source_id`, `external_id`) is unique. The importer uses `INSERT … ON CONFLICT DO UPDATE … WHERE source_revision IS DISTINCT FROM EXCLUDED.source_revision`. A repeated run reports zero inserts. This was verified on live INGV data (315 skipped) and in a PostgreSQL integration test.

@@ -5,7 +5,7 @@
  */
 import type { SyncSummary } from "./investigation.js";
 export type AssistantStatus = "ready" | "model_unavailable" | "data_unavailable" | "starting";
-export type ToolName = "search_records" | "get_record_details" | "search_places" | "list_sources";
+export type ToolName = "search_records" | "get_record_details" | "search_places" | "list_sources" | "search_events";
 export type Language = "en" | "ru" | "de";
 export type VoiceErrorCode = "voice_disabled" | "invalid_message" | "busy" | "provider_unavailable" | "timeout" | "internal_error";
 
@@ -56,6 +56,15 @@ export interface SourceView {
   lastSync?: SyncSummary | null;
 }
 
+/** Radius applied by the search_events tool; the map draws it as a circle. */
+export interface SearchArea {
+  lat: number;
+  lon: number;
+  radiusKm: number;
+  /** Settlement name or selected item label used as the center. */
+  label: string;
+}
+
 export interface PlaceView {
   id: string;
   sourceId: string;
@@ -97,7 +106,7 @@ export type ServerFrame =
   | (ClientBase & { type: "tool.completed"; tool: ToolName; recordsFound: number })
   | (ClientBase & { type: "assistant.delta"; text: string })
   | (ClientBase & { type: "turn.clarification"; conversationId: string; message: string; choices: Array<{ id: string; label: string }> })
-  | (ClientBase & { type: "turn.completed"; conversationId: string; assistantMessage: string; appliedFilters: Array<Record<string, unknown>>; result: { total: number; records: RecordView[]; places?: PlaceView[]; tripPlan?: TripPlan; mapFeatures: GeoJSON.FeatureCollection }; sources: SourceView[] })
+  | (ClientBase & { type: "turn.completed"; conversationId: string; assistantMessage: string; appliedFilters: Array<Record<string, unknown>>; result: { total: number; records: RecordView[]; places?: PlaceView[]; tripPlan?: TripPlan; searchArea?: SearchArea; mapFeatures: GeoJSON.FeatureCollection }; sources: SourceView[] })
   | (ClientBase & { type: "turn.cancelled" })
   | (ClientBase & { type: "turn.error"; code: string; message: string; retryable: boolean })
   | (ClientBase & { type: "voice.ready" })

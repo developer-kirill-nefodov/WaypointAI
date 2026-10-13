@@ -131,13 +131,13 @@
         {
           "allOf": [
             { "$ref": "#/$defs/base" },
-            { "type": "object", "required": ["requestId", "tool", "label"], "properties": { "type": { "const": "tool.started" }, "tool": { "enum": ["search_records", "get_record_details", "search_places", "list_sources"] }, "label": { "type": "string", "maxLength": 160 } } }
+            { "type": "object", "required": ["requestId", "tool", "label"], "properties": { "type": { "const": "tool.started" }, "tool": { "enum": ["search_records", "get_record_details", "search_places", "list_sources", "search_events"] }, "label": { "type": "string", "maxLength": 160 } } }
           ]
         },
         {
           "allOf": [
             { "$ref": "#/$defs/base" },
-            { "type": "object", "required": ["requestId", "tool", "recordsFound"], "properties": { "type": { "const": "tool.completed" }, "tool": { "enum": ["search_records", "get_record_details", "search_places", "list_sources"] }, "recordsFound": { "type": "integer", "minimum": 0 } } }
+            { "type": "object", "required": ["requestId", "tool", "recordsFound"], "properties": { "type": { "const": "tool.completed" }, "tool": { "enum": ["search_records", "get_record_details", "search_places", "list_sources", "search_events"] }, "recordsFound": { "type": "integer", "minimum": 0 } } }
           ]
         },
         {
@@ -180,6 +180,7 @@
                       "records": { "type": "array", "maxItems": 50, "items": { "$ref": "#/$defs/record" } },
                       "places": { "type": "array", "maxItems": 50, "items": { "$ref": "#/$defs/place" } },
                       "tripPlan": { "$ref": "#/$defs/tripPlan" },
+                      "searchArea": { "$ref": "#/$defs/searchArea" },
                     "mapFeatures": { "type": "object", "required": ["type", "features"], "properties": { "type": { "const": "FeatureCollection" }, "features": { "type": "array", "items": { "type": "object" } } } }
                   },
                   "additionalProperties": false
@@ -262,8 +263,20 @@
         "lat": { "type": "number", "minimum": -90, "maximum": 90 },
         "lon": { "type": "number", "minimum": -180, "maximum": 180 },
         "accuracyMeters": { "type": ["number", "null"], "minimum": 0 },
+        "distanceMeters": { "type": "integer", "minimum": 0, "description": "Straight-line distance from the search center; present only for radius searches." },
         "attributes": { "type": "object" }
       }
+    },
+    "searchArea": {
+      "type": "object",
+      "required": ["lat", "lon", "radiusKm", "label"],
+      "properties": {
+        "lat": { "type": "number", "minimum": -90, "maximum": 90 },
+        "lon": { "type": "number", "minimum": -180, "maximum": 180 },
+        "radiusKm": { "type": "number", "exclusiveMinimum": 0, "maximum": 300 },
+        "label": { "type": "string", "maxLength": 240 }
+      },
+      "additionalProperties": false
     },
     "source": {
       "type": "object",

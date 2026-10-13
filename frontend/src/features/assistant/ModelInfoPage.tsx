@@ -1,4 +1,4 @@
-import { BrainCircuit, Check, Database, Globe2, Lightbulb, MapPinned, Route, Search, ShieldCheck, Sparkles } from "lucide-react";
+import { BrainCircuit, Check, Database, Globe2, Lightbulb, MapPinned, Radar, Route, Search, ShieldCheck, Sparkles } from "lucide-react";
 import type { Language } from "../../shared/i18n";
 import { translate } from "../../shared/i18n";
 
@@ -16,6 +16,7 @@ export default function ModelInfoPage({ language, modelLabel, ready }: ModelInfo
     { icon: Database, name: "get_record_details", description: t("Показывает подробности одной записи по точному идентификатору.", "Loads the details of one record by its exact ID.") },
     { icon: MapPinned, name: "search_places", description: t("Ищет реальные места из снимков OpenStreetMap по названию, категории, стране или городу.", "Finds real places in OpenStreetMap snapshots by name, category, country, or city.") },
     { icon: Globe2, name: "list_sources", description: t("Возвращает доступные источники, их охват, даты и сведения об атрибуции.", "Lists available sources, their coverage, snapshot dates, and attribution.") },
+    { icon: Radar, name: "search_events", description: t("Ищет землетрясения по городу или выбранной точке, радиусу, периоду и магнитуде; центр находит сервер, на карте рисуется круг.", "Finds earthquakes by settlement or selected point, radius, period, and magnitude; the server resolves the center and the map draws the circle.") },
   ];
   const suggestions = language === "ru" ? [
     "Найди музеи в Берлине и покажи их на карте.",
@@ -77,7 +78,7 @@ export default function ModelInfoPage({ language, modelLabel, ready }: ModelInfo
         </section>
 
         <section className="model-info-card model-tools-card">
-          <div className="model-section-title"><span className="model-section-icon"><Database size={16} /></span><div><h3>{t("Функции сервера, доступные модели", "Server tools available to the model")}</h3><p>{t("Только эти четыре функции разрешены для вызова из модели", "Only these four functions are allowlisted for model calls")}</p></div></div>
+          <div className="model-section-title"><span className="model-section-icon"><Database size={16} /></span><div><h3>{t("Функции сервера, доступные модели", "Server tools available to the model")}</h3><p>{t("Только эти пять функций разрешены для вызова из модели", "Only these five functions are allowlisted for model calls")}</p></div></div>
           <div className="model-tool-list">{toolCards.map(({ icon: Icon, name, description }) => <article className="model-tool" key={name}><span className="model-tool-icon"><Icon size={15} /></span><div><h4>{name}</h4><p>{description}</p></div></article>)}</div>
           <div className="model-guardrail"><ShieldCheck size={16} /><span>{t("Функции чтения ограничены серверным списком. У модели нет прямого доступа к базе, SQL или произвольному поиску в интернете.", "Read operations are restricted to server allowlists. The model has no direct database, SQL, or unrestricted web-search access.")}</span></div>
         </section>

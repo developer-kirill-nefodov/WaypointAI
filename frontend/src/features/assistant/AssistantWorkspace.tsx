@@ -1,6 +1,6 @@
 import { lazy, Suspense, useCallback, useEffect, useRef, useState, type FormEvent, type KeyboardEvent as ReactKeyboardEvent } from "react";
 import { ArrowUp, ArrowUpRight, BrainCircuit, ChevronDown, Clock3, House, Layers3, MapPinned, MoreHorizontal, Plus, Radar, RefreshCw, SlidersHorizontal, Sparkles, Square, Trash2 } from "lucide-react";
-import type { PlaceView, RecordView, Scope, ServerFrame, SourceView, TripPlan } from "@waypoint-ai/shared";
+import type { PlaceView, RecordView, Scope, ServerFrame, SourceView, TripPlan, SearchArea } from "@waypoint-ai/shared";
 import MapPanel from "../../widgets/map/MapPanel";
 import { clearAssistantHistory, loadCapabilities, loadDataSources, type Capabilities, type ConnectionState } from "../../shared/api/client";
 import { createAssistantConnection, type AssistantConnection, type ReconnectInfo } from "../../shared/api/assistantSocket";
@@ -74,6 +74,8 @@ export default function AssistantWorkspace() {
   const [capabilities, setCapabilities] = useState<Capabilities | null>(null);
   const [connection, setConnection] = useState<ConnectionState>("connecting");
   const [reconnectInfo, setReconnectInfo] = useState<ReconnectInfo>(null);
+  // Radius applied by the search_events tool in the latest answer; drawn on the map.
+  const [searchArea, setSearchArea] = useState<SearchArea | null>(null);
   // Bumped on every successful (re)connect so readiness and sources are reloaded after a server restart.
   const [metadataVersion, setMetadataVersion] = useState(0);
   const connectionRef = useRef<AssistantConnection | null>(null);
@@ -161,6 +163,7 @@ export default function AssistantWorkspace() {
               setMapPlaces([]);
               setMapRecords([]);
               setTripPlan(null);
+              setSearchArea(null);
               setSelectedResultKey(null);
               setResetViewportRevision((revision) => revision + 1);
             }
@@ -176,6 +179,7 @@ export default function AssistantWorkspace() {
             setMapPlaces(frame.result.places ?? []);
             setMapRecords(frame.result.records);
             setTripPlan(frame.result.tripPlan ?? null);
+            setSearchArea(frame.result.searchArea ?? null);
             setResultsLoaded(true);
             setSelectedResultKey(null);
             setAppliedFilters(frame.appliedFilters);
@@ -328,6 +332,7 @@ export default function AssistantWorkspace() {
     setMapPlaces([]);
     setMapRecords([]);
     setTripPlan(null);
+    setSearchArea(null);
     setResultsLoaded(false);
     setSelectedResultKey(null);
     setAppliedFilters([]);
@@ -405,6 +410,7 @@ export default function AssistantWorkspace() {
     setMapPlaces([]);
     setMapRecords([]);
     setTripPlan(null);
+    setSearchArea(null);
     setSelectedResultKey(null);
     setResultsLoaded(false);
     setAppliedFilters([]);
@@ -442,6 +448,7 @@ export default function AssistantWorkspace() {
     setMapPlaces([]);
     setMapRecords([]);
     setTripPlan(null);
+    setSearchArea(null);
     setSelectedResultKey(null);
     setResultsLoaded(false);
     setAppliedFilters([]);
@@ -465,6 +472,7 @@ export default function AssistantWorkspace() {
     setMapPlaces([]);
     setMapRecords([]);
     setTripPlan(null);
+    setSearchArea(null);
     setSelectedResultKey(null);
     setResultsLoaded(false);
     setAppliedFilters([]);
@@ -614,7 +622,7 @@ export default function AssistantWorkspace() {
             </form>
           </section>
 
-          <MapPanel language={language} highlights={mapPlaces} records={mapRecords} tripPlan={tripPlan} sourceIds={selectedSourceIds} selectedResultKey={selectedResultKey} onSelectResult={setSelectedResultKey} sourceLabels={Object.fromEntries(sources.map((source) => [source.id, source.label]))} sourceDates={Object.fromEntries(sources.flatMap((source) => source.snapshotDate ? [[source.id, source.snapshotDate]] : []))} resultsLoaded={resultsLoaded} resetViewportRevision={resetViewportRevision} />
+          <MapPanel language={language} highlights={mapPlaces} records={mapRecords} tripPlan={tripPlan} radius={searchArea} sourceIds={selectedSourceIds} selectedResultKey={selectedResultKey} onSelectResult={setSelectedResultKey} sourceLabels={Object.fromEntries(sources.map((source) => [source.id, source.label]))} sourceDates={Object.fromEntries(sources.flatMap((source) => source.snapshotDate ? [[source.id, source.snapshotDate]] : []))} resultsLoaded={resultsLoaded} resetViewportRevision={resetViewportRevision} />
         </div>}
         <footer className="app-footer">
           <div className="app-footer-brand">

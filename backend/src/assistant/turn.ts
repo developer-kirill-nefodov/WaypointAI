@@ -2,7 +2,7 @@ import type { ClientFrame, PlaceView, RecordView, ServerFrame, ToolName } from "
 import { getConversationMessages, saveConversationTurn } from "../data/conversation.repository.js";
 import { getPlaceDetails, getRecordDetails, getSources } from "../data/record.repository.js";
 import { ALLOWED_TOOLS } from "../tools/allowlist.js";
-import { assistantToolDefinitions, executeAssistantTool } from "../tools/assistant-tools.js";
+import { assistantToolDefinitions, executeAssistantTool, type SearchArea } from "../tools/assistant-tools.js";
 import { chat, OllamaUnavailableError, type ChatMessage } from "../llm/ollama.provider.js";
 import { env } from "../config/env.js";
 import { releaseInference, tryAcquireInference } from "../llm/inference-gate.js";
@@ -46,6 +46,7 @@ export async function processTurn(
   let found: RecordView[] = [];
   let totalRecords = 0;
   let placesFound: PlaceView[] = [];
+  let searchArea: SearchArea | undefined;
   let totalPlaces = 0;
   let listedSourceIds: string[] = [];
   let lastTool: ToolName | undefined;
@@ -246,7 +247,14 @@ export async function processTurn(
         emit({ protocolVersion: 1, type: "turn.status", requestId: frame.requestId, phase: "searching", label: text(language, "Ищу в локальной базе", "Searching the local database") });
         emit({ protocolVersion: 1, type: "tool.started", requestId: frame.requestId, tool: toolName, label: toolLabel(toolName, language) });
         const toolStartedAt = performance.now();
-        const result = await executeAssistantTool(toolName, call.function.arguments, frame.scope, allowedSourceIds);
+        const result = await executeAssistantTool(
+          toolName,
+          call.function.arguments,
+          frame.scope,
+          allowedSourceIds,
+          selectionPoint(selectedContext),
+          frame.message,
+        );
         toolDurationMs += Math.round(performance.now() - toolStartedAt);
         messages.push({ role: "tool", tool_name: toolName, content: JSON.stringify(result.content) });
         if (result.records) {
@@ -258,6 +266,7 @@ export async function processTurn(
           totalPlaces = Math.max(totalPlaces, result.totalPlaces ?? result.places.length);
         }
         if (result.sourceIds) listedSourceIds = result.sourceIds;
+        if (result.searchArea) searchArea = result.searchArea;
         emit({ protocolVersion: 1, type: "tool.completed", requestId: frame.requestId, tool: toolName, recordsFound: result.resultsFound });
       }
     }
@@ -283,7 +292,14 @@ export async function processTurn(
         ...(frame.scope.dateRange ? [{ key: "dateRange", value: frame.scope.dateRange }] : []),
         ...(typeof frame.scope.filters?.category === "string" ? [{ key: "category", value: frame.scope.filters.category.slice(0, 120) }] : []),
         ...(lastTool ? [{ key: "tool", value: lastTool }] : []),
-      ], result: { total: totalRecords + totalPlaces, records: found, places: placesFound, ...(tripPlan ? { tripPlan } : {}), mapFeatures }, sources
+      ], result: {
+        total: totalRecords + totalPlaces,
+        records: found,
+        places: placesFound,
+        ...(tripPlan ? { tripPlan } : {}),
+        ...(searchArea ? { searchArea } : {}),
+        mapFeatures,
+      }, sources
     });
   } catch (error) {
     if (signal.aborted) {
@@ -329,4 +345,14 @@ async function resolveSelectedMapItem(selection: { type: "place" | "record"; id:
   const at = Date.parse(record.observedAt);
   if ((dateRange?.from && at < Date.parse(dateRange.from)) || (dateRange?.to && at > Date.parse(dateRange.to))) return { unavailable: true, reason: "The selected record is outside the active date range." };
   return { type: "record", ...record };
+}
+
+/** Center for "near this point" searches: only a verified, in-scope selected map item. */
+function selectionPoint(selected: Awaited<ReturnType<typeof resolveSelectedMapItem>>): { lat: number; lon: number; label: string } | null {
+  if (!selected || !("lat" in selected)) return null;
+  return {
+    lat: selected.lat,
+    lon: selected.lon,
+    label: "name" in selected ? selected.name : selected.label,
+  };
 }

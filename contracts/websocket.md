@@ -222,7 +222,7 @@ Clarification completes the current turn. The next user answer is a new `turn.su
 
 Each place includes `countryCode` as an ISO 3166-1 alpha-2 code. The current local sample covers selected regions in DE, PL, FR, IT and ES, plus all of RO; country coverage does not imply a complete national dataset.
 
-The assistant's allowed read-only tools are `search_records`, `get_record_details`, `search_places`, and `list_sources`. `search_places` searches the locally imported place catalogue; extracts may be incomplete. Source provenance and attribution are returned in `sources`. `list_sources` gives the model a concise description of sources available in the current scope; full source metadata is also returned to the UI in `turn.completed.sources`.
+The assistant's allowed read-only tools are `search_records`, `get_record_details`, `search_places`, `list_sources`, and `search_events`. `search_events` searches imported events by settlement or selected map item, radius, period, and magnitude, with the same validation and limits as `POST /api/v1/investigations/query`; the backend resolves the center and never accepts coordinates from the model. When it applied a radius, `turn.completed.result.searchArea` (`lat`, `lon`, `radiusKm`, `label`) lets the UI draw the circle, and radius results carry `distanceMeters`. `search_places` searches the locally imported place catalogue; extracts may be incomplete. Source provenance and attribution are returned in `sources`. `list_sources` gives the model a concise description of sources available in the current scope; full source metadata is also returned to the UI in `turn.completed.sources`.
 
 ### `turn.cancelled` and `turn.error`
 

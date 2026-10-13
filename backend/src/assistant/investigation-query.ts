@@ -3,43 +3,16 @@ import type { EventSearchInput, EventSearchResult } from "../data/investigation.
 import type { ResolvedPlace } from "../data/settlement.repository.js";
 import type { ChatMessage, ChatResult, ToolDefinition } from "../llm/ollama.provider.js";
 import { OllamaUnavailableError } from "../llm/ollama.provider.js";
-import { HOUR_MS } from "../services/time.js";
 import {
-  parseToolArguments,
+  normalizeToolArguments,
   SEARCH_EVENTS_TOOL,
   searchEventsArgsSchema,
   searchEventsToolDefinition,
   type SearchEventsArgs,
 } from "../tools/search-events.js";
+import { buildEventSearch, complementFromText, dropNonSettlementPlace, resolveSearchCenter } from "./event-search.js";
 import { interpretWithRules } from "./investigation-rules.js";
 
-// Countries and regions the small model sometimes passes as place despite the prompt; the catalogue covers them anyway.
-// Lowercase; compared with the trimmed, lowercased place.
-const NOT_A_SETTLEMENT = new Set([
-  // Countries and Europe.
-  "italy", "italia", "italien", "италия",
-  "europe", "европа", "europa",
-  "germany", "deutschland", "германия",
-  "poland", "polska", "polen", "польша",
-  "romania", "românia", "rumänien", "румыния",
-  "france", "frankreich", "франция",
-  "spain", "españa", "spanien", "испания",
-  // Italian regions and islands.
-  "sicily", "sicilia", "sizilien", "сицилия",
-  "sardinia", "sardegna",
-  "umbria", "marche",
-  "lazio", "latium",
-  "abruzzo", "abruzzen",
-  "toscana", "tuscany", "toskana",
-  "campania", "kampanien",
-  "calabria", "kalabrien",
-  "molise", "basilicata",
-  "puglia", "apulia",
-  "emilia-romagna", "liguria", "piemonte", "lombardia", "veneto",
-  "friuli", "friuli-venezia giulia",
-  "trentino", "trentino-alto adige",
-  "central italy", "southern italy", "northern italy",
-]);
 
 const MODEL_TIMEOUT_MS = 45_000;
 
@@ -129,39 +102,17 @@ export async function runInvestigationQuery(input: QueryInput, deps: QueryDepend
     };
   }
 
-  interpretation = dropNonSettlementPlace(interpretation);
-  const args = interpretation.arguments;
-  let center: { lat: number; lon: number } | null = null;
-  let resolvedPlace: ResolvedPlace | null = null;
-  if (args.nearSelection) {
-    if (!input.selection) return { ok: false, status: 422, error: "selection_required", interpretation };
-    center = { lat: input.selection.lat, lon: input.selection.lon };
-  } else if (args.place) {
-    resolvedPlace = await deps.resolveSettlement(args.place);
-    if (!resolvedPlace) return { ok: false, status: 422, error: "place_not_found", interpretation };
-    center = { lat: resolvedPlace.lat, lon: resolvedPlace.lon };
-  }
+  const statedArgs = interpretation.interpretedBy === "model"
+    ? complementFromText(interpretation.arguments, input.text)
+    : interpretation.arguments;
+  const { args, ignoredPlace } = dropNonSettlementPlace(statedArgs);
+  interpretation = { ...interpretation, arguments: args, ...(ignoredPlace ? { ignoredPlace } : {}) };
+  const center = await resolveSearchCenter(args, input.selection ?? null, deps.resolveSettlement);
+  if (!center.ok) return { ok: false, status: 422, error: center.error, interpretation };
 
-  const hours = args.hours ?? SEARCH_LIMITS.hours.default;
-  const radiusKm = args.radiusKm ?? SEARCH_LIMITS.radiusKm.default;
-  const search: EventSearchInput = {
-    from: new Date(now.getTime() - hours * HOUR_MS),
-    to: now,
-    near: center ? { ...center, radiusMeters: radiusKm * 1000 } : undefined,
-    minMagnitude: args.minMagnitude,
-    maxMagnitude: args.maxMagnitude,
-    limit: SEARCH_LIMITS.queryResultLimit,
-  };
+  const search = buildEventSearch(args, center.point, now);
   const result = await deps.searchEvents(search);
-  return { ok: true, interpretation, resolvedPlace, search, result };
-}
-
-/** Removes a country or region passed as place (and its radius), so the search covers the whole catalogue. */
-function dropNonSettlementPlace(interpretation: Interpretation): Interpretation {
-  const place = interpretation.arguments.place?.trim();
-  if (!place || !NOT_A_SETTLEMENT.has(place.toLowerCase())) return interpretation;
-  const { place: _place, radiusKm: _radius, ...rest } = interpretation.arguments;
-  return { ...interpretation, arguments: rest, ignoredPlace: place };
+  return { ok: true, interpretation, resolvedPlace: center.resolvedPlace, search, result };
 }
 
 async function interpretWithModel(input: QueryInput, now: Date, deps: QueryDependencies): Promise<ModelAttempt> {
@@ -179,7 +130,7 @@ async function interpretWithModel(input: QueryInput, now: Date, deps: QueryDepen
       const fallbackReason = rejectedTools.length ? "model_rejected_tool" : "model_no_tool_call";
       return { interpretation: null, fallbackReason, rejectedTools };
     }
-    const parsed = searchEventsArgsSchema.safeParse(stripNulls(parseToolArguments(call.function.arguments)));
+    const parsed = searchEventsArgsSchema.safeParse(normalizeToolArguments(call.function.arguments));
     if (!parsed.success) return { interpretation: null, fallbackReason: "model_invalid_arguments", rejectedTools };
     return {
       interpretation: {
@@ -238,8 +189,3 @@ function buildMessages(input: QueryInput, now: Date): ChatMessage[] {
   ];
 }
 
-/** Small models sometimes send null for omitted optional fields. */
-function stripNulls(value: unknown): unknown {
-  if (!value || typeof value !== "object" || Array.isArray(value)) return value;
-  return Object.fromEntries(Object.entries(value).filter(([, item]) => item !== null));
-}

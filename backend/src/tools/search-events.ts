@@ -75,3 +75,11 @@ export function parseToolArguments(raw: unknown): unknown {
     return null;
   }
 }
+
+/** Parses raw tool arguments: JSON strings are decoded and nulls for omitted optional fields are dropped. */
+export function normalizeToolArguments(raw: unknown): unknown {
+  const value = parseToolArguments(raw);
+  if (!value || typeof value !== "object" || Array.isArray(value)) return value;
+  // Small models sometimes send null for omitted optional fields.
+  return Object.fromEntries(Object.entries(value).filter(([, item]) => item !== null));
+}

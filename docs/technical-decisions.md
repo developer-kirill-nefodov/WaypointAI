@@ -148,7 +148,7 @@ The project rules require synthetic demo fixtures. If the network is unavailable
 | Validation | Zod schema, then clamping to the REST bounds | Same limits as the REST endpoint |
 | Fallback | Rule-based parser for "last N hours/days", "within N km of X", "magnitude above N" in EN/RU/DE; response says `interpretedBy: "rules"` | The 4B local model can produce malformed calls; the fallback is visible, not hidden |
 | Concurrency | Move `modelBusy` from `turn.ts` into a shared gate | One local inference at a time across chat and query |
-| Chat integration | Not in this slice: `search_events` is used only by `POST /investigations/query`; the chat allowlist is unchanged | Keeps the WebSocket contract stable; adding it to chat needs `ToolName`, both WebSocket contract files, and the chat prompt updated together |
+| Chat integration | `search_events` is also allowlisted for the chat assistant. It shares validation, settlement resolution, and bounds with the query endpoint (`assistant/event-search.ts`), is narrowed by the chat's source and date scope, can use the selected map item as the center, and returns `searchArea` in `turn.completed` so the chat map draws the circle | One behavior for both entry points; the WebSocket contract, shared types, and prompt were updated together |
 
 ## 5. Frontend
 

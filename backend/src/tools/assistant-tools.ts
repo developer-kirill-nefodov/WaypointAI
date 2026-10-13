@@ -2,6 +2,8 @@ import { z } from "zod";
 import type { PlaceView, RecordView, Scope, ToolName } from "@waypoint-ai/shared";
 import { getRecordDetails, getSources, searchPlaces, searchRecords } from "../data/record.repository.js";
 import type { ToolDefinition } from "../llm/ollama.provider.js";
+import { searchEventsToolDefinition } from "./search-events.js";
+import { executeSearchEventsTool, type SearchEventsToolContext } from "./search-events-tool.js";
 
 const searchRecordsArgs = z.object({
   query: z.string().max(100).optional(),
@@ -65,10 +67,20 @@ export const assistantToolDefinitions: ToolDefinition[] = [
       parameters: { type: "object", additionalProperties: false, properties: {} },
     },
   },
+  searchEventsToolDefinition,
 ];
+
+/** Radius search applied by search_events, drawn as a circle on the map. */
+export interface SearchArea {
+  lat: number;
+  lon: number;
+  radiusKm: number;
+  label: string;
+}
 
 export interface ToolExecutionResult {
   content: unknown;
+  searchArea?: SearchArea;
   records?: RecordView[];
   totalRecords?: number;
   places?: PlaceView[];
@@ -82,7 +94,11 @@ export async function executeAssistantTool(
   rawArgs: unknown,
   scope: Scope,
   sourceIds?: string[],
+  selection: SearchEventsToolContext["selection"] = null,
+  userText?: string,
 ): Promise<ToolExecutionResult> {
+  if (name === "search_events") return executeSearchEventsTool(rawArgs, { scope, sourceIds, selection, userText });
+
   if (name === "search_records") {
     const parsed = searchRecordsArgs.safeParse(rawArgs);
     if (!parsed.success) return { content: { error: "Invalid search parameters. Use only documented fields." }, resultsFound: 0 };

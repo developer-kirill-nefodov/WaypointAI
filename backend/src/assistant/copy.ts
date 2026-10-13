@@ -11,6 +11,7 @@ const germanText: Record<string, string> = {
   "Searching records": "Einträge werden gesucht", "Loading record": "Eintrag wird geladen", "Searching places": "Orte werden gesucht", "Listing sources": "Quellen werden aufgelistet",
   "Trip planning stopped.": "Reiseplanung wurde angehalten.", "Searching cities and places in the local extract": "Städte und Orte werden im lokalen Datensatz gesucht", "Searching": "Suche läuft", "Building a plan from verified places": "Reiseplan wird aus bestätigten Orten erstellt", "Understanding your request": "Anfrage wird analysiert", "Searching the local database": "Lokale Datenbank wird durchsucht", "Writing the answer": "Antwort wird erstellt",
   "Response language: ": "Antwortsprache: ",
+  "Searching events by place and radius": "Ereignisse nach Ort und Radius werden gesucht",
   "Local assistant is ready.": "Der lokale Assistent ist bereit.",
 };
 export function text(language: "en" | "ru" | "de", ru: string, en: string): string { return language === "ru" ? ru : language === "de" ? germanText[en] ?? en : en; }
@@ -18,6 +19,7 @@ export function text(language: "en" | "ru" | "de", ru: string, en: string): stri
 export function toolLabel(tool: ToolName, language: "en" | "ru" | "de"): string {
   const labels = {
     search_records: text(language, "Поиск по записям", "Searching records"),
+    search_events: text(language, "Поиск событий по месту и радиусу", "Searching events by place and radius"),
     get_record_details: text(language, "Загрузка записи", "Loading record"),
     search_places: text(language, "Поиск мест", "Searching places"),
     list_sources: text(language, "Список источников", "Listing sources"),
@@ -27,5 +29,6 @@ export function toolLabel(tool: ToolName, language: "en" | "ru" | "de"): string 
     case "get_record_details": return labels.get_record_details;
     case "search_places": return labels.search_places;
     case "list_sources": return labels.list_sources;
+    case "search_events": return labels.search_events;
   }
 }
