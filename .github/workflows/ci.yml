@@ -7,6 +7,23 @@ on:
 jobs:
   verify:
     runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:17-alpine
+        env:
+          POSTGRES_DB: waypoint
+          POSTGRES_USER: waypoint
+          POSTGRES_PASSWORD: waypoint_dev
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U waypoint"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    env:
+      # Synthetic fixtures only; the test creates and migrates this separate database.
+      TEST_DATABASE_URL: postgres://waypoint:waypoint_dev@localhost:5432/waypoint_test
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -15,5 +32,8 @@ jobs:
           cache: npm
       - run: npm ci
       - run: npm run typecheck
+      - name: Generated OpenAPI types match the contract
+        run: git diff --exit-code -- packages/shared/src/openapi.generated.ts
       - run: npm run build
       - run: npm test
+      - run: npm run test:db
