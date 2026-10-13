@@ -1,18 +1,26 @@
-import { lazy, Suspense, useEffect, useRef, useState, type FormEvent, type KeyboardEvent as ReactKeyboardEvent } from "react";
-import { ArrowUp, ArrowUpRight, BrainCircuit, ChevronDown, Clock3, House, Layers3, MapPinned, MoreHorizontal, Plus, RefreshCw, SlidersHorizontal, Sparkles, Square, Trash2 } from "lucide-react";
+import { lazy, Suspense, useCallback, useEffect, useRef, useState, type FormEvent, type KeyboardEvent as ReactKeyboardEvent } from "react";
+import { ArrowUp, ArrowUpRight, BrainCircuit, ChevronDown, Clock3, House, Layers3, MapPinned, MoreHorizontal, Plus, Radar, RefreshCw, SlidersHorizontal, Sparkles, Square, Trash2 } from "lucide-react";
 import type { PlaceView, RecordView, Scope, ServerFrame, SourceView, TripPlan } from "@waypoint-ai/shared";
 import MapPanel from "../../widgets/map/MapPanel";
-import { clearAssistantHistory, connectAssistant, loadCapabilities, loadDataSources, type Capabilities, type ConnectionState } from "../../shared/api/client";
+import { clearAssistantHistory, loadCapabilities, loadDataSources, type Capabilities, type ConnectionState } from "../../shared/api/client";
+import { createAssistantConnection, type AssistantConnection, type ReconnectInfo } from "../../shared/api/assistantSocket";
 import { readLanguage, translate, type Language, LANGUAGE_STORAGE_KEY } from "../../shared/i18n";
 import ModelInfoPage from "./ModelInfoPage";
 import HomeDashboard from "./HomeDashboard";
+import Logo from "../../shared/ui/Logo";
+import { pageCaption, pageFromPath, pageTitle, pathForPage, type AppPage } from "../../shared/routing";
+import MicButton, { voiceStatusText } from "../voice/MicButton";
+import { isVoiceFrame, useVoiceInput } from "../voice/useVoiceInput";
 
 type Message = { role: "assistant" | "user"; text: string; durationMs?: number; choices?: Array<{ id: string; label: string }> };
 type SuggestedReply = { label: string; prompt: string };
 type SavedChat = { id: string; conversationId: string | null; messages: Message[]; savedAt: number };
 type SavedConversation = SavedChat & { recentChats: SavedChat[] };
 const HISTORY_STORAGE_KEY = "waypoint-ai:assistant-history:v1";
+const MESSAGE_ANCHOR_OFFSET_PX = 16;
 const MarkdownMessage = lazy(() => import("./MarkdownMessage"));
+// Loaded on first visit so the investigation page does not grow the initial bundle.
+const InvestigationWorkspace = lazy(() => import("../investigation/InvestigationWorkspace"));
 
 function welcomeMessage(language: Language): Message {
   return { role: "assistant", text: translate(language, "Привет! Я локальный помощник для поиска и изучения геоданных. Опишите, что хотите найти.", "Hi! I’m your local assistant for exploring geospatial data. Tell me what you’d like to find.") };
@@ -40,7 +48,23 @@ function starterReplies(language: Language): SuggestedReply[] {
 
 export default function AssistantWorkspace() {
   const [language, setLanguage] = useState<Language>(readLanguage);
-  const [activePage, setActivePage] = useState<"home" | "workspace" | "model">("home");
+  const [activePage, setActivePageState] = useState<AppPage>(() => pageFromPath(window.location.pathname));
+  // Map pages stay mounted after their first visit so Leaflet, filters, and results are not rebuilt on every switch.
+  const [visitedPages, setVisitedPages] = useState<Set<AppPage>>(() => new Set([activePage]));
+  const showPage = useCallback((page: AppPage) => {
+    setActivePageState(page);
+    setVisitedPages((current) => current.has(page) ? current : new Set([...current, page]));
+  }, []);
+  const setActivePage = useCallback((page: AppPage) => {
+    const path = pathForPage(page);
+    if (window.location.pathname !== path) window.history.pushState({ page }, "", path);
+    showPage(page);
+  }, [showPage]);
+  useEffect(() => {
+    const onPopState = () => showPage(pageFromPath(window.location.pathname));
+    window.addEventListener("popstate", onPopState);
+    return () => window.removeEventListener("popstate", onPopState);
+  }, [showPage]);
   const [savedConversation] = useState(() => readSavedConversation(language));
   const socketRef = useRef<WebSocket | null>(null);
   const requestStartedAtRef = useRef<number | null>(null);
@@ -49,7 +73,11 @@ export default function AssistantWorkspace() {
   const sourcesRef = useRef<SourceView[]>([]);
   const [capabilities, setCapabilities] = useState<Capabilities | null>(null);
   const [connection, setConnection] = useState<ConnectionState>("connecting");
-  const [reconnectVersion, setReconnectVersion] = useState(0);
+  const [reconnectInfo, setReconnectInfo] = useState<ReconnectInfo>(null);
+  // Bumped on every successful (re)connect so readiness and sources are reloaded after a server restart.
+  const [metadataVersion, setMetadataVersion] = useState(0);
+  const connectionRef = useRef<AssistantConnection | null>(null);
+  const connectedBeforeRef = useRef(false);
   const [pending, setPending] = useState(false);
   const [elapsedMs, setElapsedMs] = useState(0);
   const [activeRequestId, setActiveRequestId] = useState<string | null>(null);
@@ -59,6 +87,13 @@ export default function AssistantWorkspace() {
   const [recentChats, setRecentChats] = useState<SavedChat[]>(savedConversation.recentChats);
   const [draft, setDraft] = useState("");
   const composerRef = useRef<HTMLTextAreaElement | null>(null);
+  const voiceBaseDraftRef = useRef("");
+  const applyVoiceTranscript = useCallback((transcript: string) => {
+    setDraft(joinDraft(voiceBaseDraftRef.current, transcript));
+    setSuggestionOffset(0);
+  }, []);
+  const voice = useVoiceInput({ socketRef, connection, language, onTranscript: applyVoiceTranscript });
+  const voiceFrameHandlerRef = useRef(voice.handleFrame);
   const focusComposerOnWorkspaceRef = useRef(false);
   const [conversationId, setConversationId] = useState<string | null>(savedConversation.conversationId);
   const [historyClearWarning, setHistoryClearWarning] = useState<string | null>(null);
@@ -83,7 +118,6 @@ export default function AssistantWorkspace() {
   const [suggestionsExpanded, setSuggestionsExpanded] = useState(false);
 
   useEffect(() => {
-    setConnection("connecting");
     setSourcesLoading(true);
     setSourceLoadFailed(false);
     const abort = new AbortController();
@@ -94,87 +128,122 @@ export default function AssistantWorkspace() {
       setSources(loadedSources);
       setSourceLoadFailed(false);
     }).catch(() => { if (!abort.signal.aborted) setSourceLoadFailed(true); }).finally(() => { if (!abort.signal.aborted) setSourcesLoading(false); });
-    const socket = connectAssistant((frame) => {
-      if (frame.type === "session.ready") setCapabilities({ assistantStatus: frame.assistantStatus, modelLabel: frame.modelLabel, demoMode: frame.demoMode });
-      if (frame.type === "turn.status") setProgressLabel(frame.label);
-      if (frame.type === "tool.started") setProgressLabel(frame.label);
-      if (frame.type === "turn.accepted") setConversationId(frame.conversationId);
-      if (frame.type === "turn.error") {
-        const durationMs = elapsedSince(requestStartedAtRef.current);
-        requestStartedAtRef.current = null;
-        setPending(false);
-        setActiveRequestId(null);
-        setProgressLabel(null);
-        setMessages((current) => [...current, { role: "assistant", text: frame.message, durationMs }]);
-      }
-      if (frame.type === "turn.clarification") {
-        const durationMs = elapsedSince(requestStartedAtRef.current);
-        requestStartedAtRef.current = null;
-        setConversationId(frame.conversationId);
-        setPending(false);
-        setActiveRequestId(null);
-        setProgressLabel(null);
-        if (frame.choices.some((choice) => choice.id.startsWith("new-"))) {
-          setMapPlaces([]);
-          setMapRecords([]);
-          setTripPlan(null);
-          setSelectedResultKey(null);
-          setResetViewportRevision((revision) => revision + 1);
-        }
-        setMessages((current) => [...current, { role: "assistant", text: frame.message, choices: frame.choices, durationMs }]);
-      }
-      if (frame.type === "turn.completed") {
-        const durationMs = elapsedSince(requestStartedAtRef.current);
-        requestStartedAtRef.current = null;
-        setConversationId(frame.conversationId);
-        setPending(false);
-        setActiveRequestId(null);
-        setProgressLabel(null);
-        setMapPlaces(frame.result.places ?? []);
-        setMapRecords(frame.result.records);
-        setTripPlan(frame.result.tripPlan ?? null);
-        setResultsLoaded(true);
-        setSelectedResultKey(null);
-        setAppliedFilters(frame.appliedFilters);
-        setResultSources(frame.sources);
-        setSuggestionOffset(0);
-        setMessages((current) => current.at(-1)?.role === "assistant" && current.at(-1)?.text === frame.assistantMessage
-          ? [...current.slice(0, -1), { ...current.at(-1)!, durationMs }]
-          : [...current, { role: "assistant", text: frame.assistantMessage, durationMs }]);
-      }
-      if (frame.type === "turn.cancelled") {
-        const durationMs = elapsedSince(requestStartedAtRef.current);
-        requestStartedAtRef.current = null;
-        setPending(false);
-        setActiveRequestId(null);
-        setProgressLabel(null);
-        const activeLanguage = readLanguage();
-        setMessages((current) => [...current, { role: "assistant", text: translate(activeLanguage, "Запрос остановлен.", "Request stopped."), durationMs }]);
-      }
-      if (frame.type === "assistant.delta") setMessages((current) => {
-        const last = current.at(-1);
-        if (last?.role === "assistant") return [...current.slice(0, -1), { ...last, text: last.text + frame.text }];
-        return [...current, { role: "assistant", text: frame.text }];
-      });
-    }, (state) => {
-      if (socketRef.current !== socket) return;
-      setConnection(state);
-      if (state === "disconnected") {
-        setPending(false);
-        setActiveRequestId(null);
-        setProgressLabel(null);
-      }
-    }, (openSocket) => {
-      openSocket.send(JSON.stringify({ protocolVersion: 1, type: "session.start", requestId: crypto.randomUUID() }));
-    });
-    socketRef.current = socket;
+    return () => abort.abort();
+  }, [metadataVersion]);
 
+  useEffect(() => {
+    const connection = createAssistantConnection({
+      onFrame: (frame) => {
+          if (isVoiceFrame(frame)) {
+            voiceFrameHandlerRef.current(frame);
+            return;
+          }
+          if (frame.type === "session.ready") setCapabilities({ assistantStatus: frame.assistantStatus, modelLabel: frame.modelLabel, demoMode: frame.demoMode, voiceInput: frame.voiceInput });
+          if (frame.type === "turn.status") setProgressLabel(frame.label);
+          if (frame.type === "tool.started") setProgressLabel(frame.label);
+          if (frame.type === "turn.accepted") setConversationId(frame.conversationId);
+          if (frame.type === "turn.error") {
+            const durationMs = elapsedSince(requestStartedAtRef.current);
+            requestStartedAtRef.current = null;
+            setPending(false);
+            setActiveRequestId(null);
+            setProgressLabel(null);
+            setMessages((current) => [...current, { role: "assistant", text: frame.message, durationMs }]);
+          }
+          if (frame.type === "turn.clarification") {
+            const durationMs = elapsedSince(requestStartedAtRef.current);
+            requestStartedAtRef.current = null;
+            setConversationId(frame.conversationId);
+            setPending(false);
+            setActiveRequestId(null);
+            setProgressLabel(null);
+            if (frame.choices.some((choice) => choice.id.startsWith("new-"))) {
+              setMapPlaces([]);
+              setMapRecords([]);
+              setTripPlan(null);
+              setSelectedResultKey(null);
+              setResetViewportRevision((revision) => revision + 1);
+            }
+            setMessages((current) => [...current, { role: "assistant", text: frame.message, choices: frame.choices, durationMs }]);
+          }
+          if (frame.type === "turn.completed") {
+            const durationMs = elapsedSince(requestStartedAtRef.current);
+            requestStartedAtRef.current = null;
+            setConversationId(frame.conversationId);
+            setPending(false);
+            setActiveRequestId(null);
+            setProgressLabel(null);
+            setMapPlaces(frame.result.places ?? []);
+            setMapRecords(frame.result.records);
+            setTripPlan(frame.result.tripPlan ?? null);
+            setResultsLoaded(true);
+            setSelectedResultKey(null);
+            setAppliedFilters(frame.appliedFilters);
+            setResultSources(frame.sources);
+            setSuggestionOffset(0);
+            setMessages((current) => current.at(-1)?.role === "assistant" && current.at(-1)?.text === frame.assistantMessage
+              ? [...current.slice(0, -1), { ...current.at(-1)!, durationMs }]
+              : [...current, { role: "assistant", text: frame.assistantMessage, durationMs }]);
+          }
+          if (frame.type === "turn.cancelled") {
+            const durationMs = elapsedSince(requestStartedAtRef.current);
+            requestStartedAtRef.current = null;
+            setPending(false);
+            setActiveRequestId(null);
+            setProgressLabel(null);
+            const activeLanguage = readLanguage();
+            setMessages((current) => [...current, { role: "assistant", text: translate(activeLanguage, "Запрос остановлен.", "Request stopped."), durationMs }]);
+          }
+          if (frame.type === "assistant.delta") setMessages((current) => {
+            const last = current.at(-1);
+            if (last?.role === "assistant") return [...current.slice(0, -1), { ...last, text: last.text + frame.text }];
+            return [...current, { role: "assistant", text: frame.text }];
+          });
+      },
+      onState: (state, reconnect) => {
+        setConnection(state);
+        setReconnectInfo(reconnect);
+      },
+      onOpen: (socket) => {
+        socketRef.current = socket;
+        socket.send(JSON.stringify({ protocolVersion: 1, type: "session.start", requestId: crypto.randomUUID() }));
+        // The first load happens on mount; reload only after a reconnect.
+        if (connectedBeforeRef.current) setMetadataVersion((version) => version + 1);
+        connectedBeforeRef.current = true;
+      },
+      onClose: () => {
+        socketRef.current = null;
+        // A turn that was running is lost with the connection; it is not resent automatically.
+        if (requestStartedAtRef.current !== null) {
+          const durationMs = elapsedSince(requestStartedAtRef.current);
+          requestStartedAtRef.current = null;
+          const activeLanguage = readLanguage();
+          setMessages((current) => [...current, {
+            role: "assistant",
+            text: translate(
+              activeLanguage,
+              "Соединение с сервером прервалось, запрос не завершён. Отправьте его ещё раз после переподключения.",
+              "The connection to the server was lost before the request finished. Send it again once reconnected.",
+            ),
+            durationMs,
+          }]);
+        }
+        setPending(false);
+        setActiveRequestId(null);
+        setProgressLabel(null);
+      },
+    });
+    connectionRef.current = connection;
     return () => {
-      abort.abort();
-      if (socketRef.current === socket) socketRef.current = null;
-      socket.close();
+      connection.close();
+      connectionRef.current = null;
+      socketRef.current = null;
     };
-  }, [reconnectVersion]);
+  }, []);
+
+  useEffect(() => {
+    voiceFrameHandlerRef.current = voice.handleFrame;
+  }, [voice.handleFrame]);
 
   useEffect(() => {
     if (activePage === "workspace" && focusComposerOnWorkspaceRef.current) {
@@ -234,13 +303,20 @@ export default function AssistantWorkspace() {
   useEffect(() => {
     const viewport = messagesRef.current;
     if (!viewport || !followLatestMessageRef.current) return;
-    viewport.scrollTop = viewport.scrollHeight;
+    const maxScrollTop = viewport.scrollHeight - viewport.clientHeight;
+    const latestMessage = viewport.querySelector<HTMLElement>("article.message:last-of-type");
+    // Keep the start of a long assistant answer visible instead of jumping past it to the end.
+    if (latestMessage?.classList.contains("assistant")) {
+      viewport.scrollTop = Math.min(latestMessage.offsetTop - MESSAGE_ANCHOR_OFFSET_PX, maxScrollTop);
+      return;
+    }
+    viewport.scrollTop = maxScrollTop;
   }, [messages, pending, progressLabel]);
 
   function submit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     const message = draft.trim();
-    if (!message || pending || invalidDateRange(fromDate, toDate) || socketRef.current?.readyState !== WebSocket.OPEN) return;
+    if (!message || pending || voice.state !== "idle" || invalidDateRange(fromDate, toDate) || socketRef.current?.readyState !== WebSocket.OPEN) return;
     const selectedMapItem = selectedResultKey?.startsWith("place:")
       ? { type: "place" as const, id: selectedResultKey.slice("place:".length) }
       : selectedResultKey?.startsWith("record:")
@@ -265,6 +341,8 @@ export default function AssistantWorkspace() {
       ...(fromDate ? { from: localDateBoundary(fromDate, false) } : {}),
       ...(toDate ? { to: localDateBoundary(toDate, true) } : {}),
     } : null;
+    // Sending a message always brings the conversation back into follow mode.
+    followLatestMessageRef.current = true;
     setMessages((current) => [...current, { role: "user", text: message }]);
     socketRef.current.send(JSON.stringify({
       protocolVersion: 1,
@@ -287,6 +365,11 @@ export default function AssistantWorkspace() {
   function updateDraft(value: string) {
     setDraft(value);
     setSuggestionOffset(0);
+  }
+
+  function startVoiceInput() {
+    voiceBaseDraftRef.current = draft;
+    void voice.start();
   }
 
   function chooseReply(prompt: string) {
@@ -399,6 +482,7 @@ export default function AssistantWorkspace() {
 
   const status = capabilities?.assistantStatus ?? "starting";
   const t = (ru: string, en: string) => translate(language, ru, en);
+  const voiceStatus = voiceStatusText(language, voice.state, voice.issue);
   const statusText = status === "ready" ? translate(language, "Модель готова", "Model ready") : status === "data_unavailable" ? translate(language, "База недоступна", "Database unavailable") : status === "model_unavailable" ? translate(language, "Модель не подключена", "Model unavailable") : translate(language, "AI-обработчик не подключён", "AI service starting");
   const dateRangeInvalid = invalidDateRange(fromDate, toDate);
 
@@ -412,17 +496,27 @@ export default function AssistantWorkspace() {
   return (
     <main className="app-shell">
       <aside className="rail">
-        <button type="button" className="brand-mark" aria-label={t("На главную", "Go to home")} title={t("На главную", "Go to home")} onClick={() => { setActivePage("home"); window.scrollTo({ top: 0, behavior: "smooth" }); }}>LI</button>
+        <button type="button" className="brand-mark" aria-label={t("На главную", "Go to home")} title={t("На главную", "Go to home")} onClick={() => { setActivePage("home"); window.scrollTo({ top: 0, behavior: "smooth" }); }}><Logo size={38} title="" /></button>
         <button type="button" className={`rail-button${activePage === "home" ? " active" : ""}`} aria-label={t("Главная", "Home")} title={t("Главная", "Home")} aria-pressed={activePage === "home"} onClick={() => { setActivePage("home"); window.scrollTo({ top: 0, behavior: "smooth" }); }}><House size={18} strokeWidth={1.8} /></button>
         <button type="button" className={`rail-button${activePage === "workspace" ? " active" : ""}`} aria-label={t("Карта и чат", "Map and chat")} title={t("Карта и чат", "Map and chat")} aria-pressed={activePage === "workspace"} onClick={() => setActivePage("workspace")}><MapPinned size={18} strokeWidth={1.8} /></button>
+        <button type="button" className={`rail-button${activePage === "investigation" ? " active" : ""}`} aria-label={t("Расследование", "Investigation")} title={t("Расследование", "Investigation")} aria-pressed={activePage === "investigation"} onClick={() => setActivePage("investigation")}><Radar size={18} strokeWidth={1.8} /></button>
         <button type="button" className={`rail-button${activePage === "model" ? " active" : ""}`} aria-label={t("Модель ИИ", "AI model")} title={t("Модель ИИ", "AI model")} aria-pressed={activePage === "model"} onClick={() => setActivePage("model")}><BrainCircuit size={18} strokeWidth={1.8} /></button>
         <div className="rail-spacer" />
         <div className="avatar">U</div>
       </aside>
 
-      <section className="workspace">
-        <h1 className="sr-only">{activePage === "model" ? t("Модель ИИ", "AI model") : activePage === "workspace" ? t("Карта и чат", "Map and chat") : t("Главная", "Home")}</h1>
-        {activePage === "model" ? <ModelInfoPage language={language} modelLabel={capabilities?.modelLabel ?? null} ready={status === "ready" || status === "data_unavailable"} /> : activePage === "home" ? <HomeDashboard language={language} modelLabel={capabilities?.modelLabel ?? null} modelReady={status === "ready" || status === "data_unavailable"} connection={connection} sources={sources} sourcesLoading={sourcesLoading} sourcesFailed={sourceLoadFailed} resultsLoaded={resultsLoaded} resultCount={mapPlaces.length + mapRecords.length} lastQuery={lastSubmittedQuery} onOpenWorkspace={() => setActivePage("workspace")} onOpenModel={() => setActivePage("model")} onChoosePrompt={(prompt) => { setDraft(prompt); setActivePage("workspace"); focusComposerOnWorkspaceRef.current = true; }} /> : <div className="content-grid">
+      <section className={activePage === "workspace" || activePage === "investigation" ? "workspace workspace-fill" : "workspace"}>
+        <h1 className="sr-only">{pageTitle(activePage, language)}</h1>
+        {activePage === "model" && <ModelInfoPage language={language} modelLabel={capabilities?.modelLabel ?? null} ready={status === "ready" || status === "data_unavailable"} />}
+        {activePage === "home" && <HomeDashboard language={language} modelLabel={capabilities?.modelLabel ?? null} modelReady={status === "ready" || status === "data_unavailable"} connection={connection} sources={sources} sourcesLoading={sourcesLoading} sourcesFailed={sourceLoadFailed} resultsLoaded={resultsLoaded} resultCount={mapPlaces.length + mapRecords.length} lastQuery={lastSubmittedQuery} onOpenWorkspace={() => setActivePage("workspace")} onOpenModel={() => setActivePage("model")} onChoosePrompt={(prompt) => { setDraft(prompt); setActivePage("workspace"); focusComposerOnWorkspaceRef.current = true; }} />}
+        {visitedPages.has("investigation") && (
+          <div className="page-keepalive" hidden={activePage !== "investigation"}>
+            <Suspense fallback={<p className="investigation-state" role="status">{t("Загружаем…", "Loading…")}</p>}>
+              <InvestigationWorkspace language={language} />
+            </Suspense>
+          </div>
+        )}
+        {visitedPages.has("workspace") && <div className="content-grid" hidden={activePage !== "workspace"}>
           <section className="chat-panel" aria-label={t("Чат помощника", "Assistant chat")}>
             <div className="panel-heading chat-heading">
               <div className="chat-heading-title"><span className="eyebrow">{t("ЛОКАЛЬНЫЙ ПОМОЩНИК", "LOCAL ASSISTANT")}</span><h2 title={conversationTitle(messages, language)}>{conversationTitle(messages, language)}</h2></div>
@@ -498,8 +592,25 @@ export default function AssistantWorkspace() {
               </div>
             </div>
             <form className="composer" onSubmit={submit}>
-              <textarea ref={composerRef} value={draft} onChange={(event) => updateDraft(event.target.value)} onKeyDown={handleComposerKeyDown} placeholder={t("Введите запрос · Enter — отправить, Shift+Enter — новая строка", "Ask a question · Enter to send, Shift+Enter for a new line")} rows={2} aria-label={t("Сообщение помощнику", "Message the assistant")} />
-              <div className="composer-footer"><span>{t("Данные обрабатываются локально", "Data is processed locally")}</span><div className="composer-actions">{pending && <button type="button" className="cancel-request" onClick={cancelRequest}><Square size={12} />{t("Остановить", "Stop")}</button>}<button type="submit" disabled={!draft.trim() || pending || dateRangeInvalid || connection !== "connected"} aria-label={t("Отправить запрос", "Send request")}><ArrowUp size={17} /></button></div></div>
+              <textarea ref={composerRef} value={draft} readOnly={voice.state !== "idle"} onChange={(event) => updateDraft(event.target.value)} onKeyDown={handleComposerKeyDown} placeholder={t("Введите запрос · Enter — отправить, Shift+Enter — новая строка", "Ask a question · Enter to send, Shift+Enter for a new line")} rows={2} aria-label={t("Сообщение помощнику", "Message the assistant")} />
+              <div className="composer-footer">
+                <span className={voiceStatus ? `voice-status ${voice.state}${voice.issue ? " issue" : ""}` : undefined} role="status" aria-live="polite">
+                  {voiceStatus ?? t("Данные обрабатываются локально", "Data is processed locally")}
+                </span>
+                <div className="composer-actions">
+                  {pending && <button type="button" className="cancel-request" onClick={cancelRequest}><Square size={12} />{t("Остановить", "Stop")}</button>}
+                  {capabilities?.voiceInput && (
+                    <MicButton
+                      language={language}
+                      state={voice.state}
+                      disabled={connection !== "connected"}
+                      onStart={startVoiceInput}
+                      onStop={voice.stop}
+                    />
+                  )}
+                  <button type="submit" disabled={!draft.trim() || pending || voice.state !== "idle" || dateRangeInvalid || connection !== "connected"} aria-label={t("Отправить запрос", "Send request")}><ArrowUp size={17} /></button>
+                </div>
+              </div>
             </form>
           </section>
 
@@ -507,14 +618,14 @@ export default function AssistantWorkspace() {
         </div>}
         <footer className="app-footer">
           <div className="app-footer-brand">
-            <span className="footer-brand-mark">LI</span>
-            <div><strong>Waypoint AI</strong><span>{activePage === "model" ? t("ЛОКАЛЬНЫЙ ПОМОЩНИК", "LOCAL ASSISTANT") : activePage === "workspace" ? t("КАРТА И ЧАТ", "MAP AND CHAT") : t("ОБЗОР РАБОЧЕГО ПРОСТРАНСТВА", "WORKSPACE OVERVIEW")}</span></div>
+            <span className="footer-brand-mark"><Logo size={30} title="" /></span>
+            <div><strong>Waypoint AI</strong><span>{pageCaption(activePage, language)}</span></div>
           </div>
           <div className="app-footer-controls">
             {capabilities?.demoMode && <span className="demo-badge">DEMO</span>}
             <span className={`status-pill ${status}`} title={capabilities?.modelLabel ?? t("Локальная модель", "Local model")}><i />{capabilities?.modelLabel ?? t("Локальная модель", "Local model")} · {statusText}</span>
-            <span className={`connection ${connection}`}><i />{connection === "connected" ? t("Соединение активно", "Connected") : connection === "connecting" ? t("Подключаемся", "Connecting") : t("Нет соединения", "Disconnected")}</span>
-            {connection === "disconnected" && <button className="retry-button" type="button" onClick={() => setReconnectVersion((value) => value + 1)}>{t("Повторить соединение", "Reconnect")}</button>}
+            <span className={`connection ${connection}`} role="status"><i />{connectionLabel(connection, reconnectInfo, language)}</span>
+            {reconnectInfo && <button className="retry-button" type="button" onClick={() => connectionRef.current?.reconnectNow()}>{t("Подключиться сейчас", "Connect now")}</button>}
             <div className="language-tabs" role="group" aria-label={t("Язык интерфейса", "Interface language")}>
               {(["en", "ru", "de"] as const).map((option) => <button key={option} type="button" lang={option} aria-pressed={language === option} aria-label={option === "en" ? "English" : option === "ru" ? "Русский" : "Deutsch"} onClick={() => setLanguage(option)}>{option.toUpperCase()}</button>)}
             </div>
@@ -523,6 +634,14 @@ export default function AssistantWorkspace() {
       </section>
     </main>
   );
+}
+
+function joinDraft(base: string, transcript: string): string {
+  const trimmedBase = base.trimEnd();
+  const trimmedTranscript = transcript.trim();
+  if (!trimmedBase) return trimmedTranscript;
+  if (!trimmedTranscript) return trimmedBase;
+  return `${trimmedBase} ${trimmedTranscript}`;
 }
 
 function readSavedConversation(language: Language): SavedConversation {
@@ -685,4 +804,13 @@ function formatAppliedFilters(filters: Array<Record<string, unknown>>, sources: 
     if (filter.key === "category" && typeof filter.value === "string") return [`${ru ? "Категория" : de ? "Kategorie" : "Category"}: ${filter.value}`];
     return [];
   });
+}
+
+function connectionLabel(connection: ConnectionState, reconnect: ReconnectInfo, language: Language): string {
+  if (connection === "connected") return translate(language, "Соединение активно", "Connected");
+  if (!reconnect) return translate(language, "Подключаемся", "Connecting");
+  const seconds = Math.max(1, Math.round(reconnect.retryInMs / 1000));
+  if (language === "ru") return `Переподключение через ${seconds} с · попытка ${reconnect.attempt}`;
+  if (language === "de") return `Neuverbindung in ${seconds} s · Versuch ${reconnect.attempt}`;
+  return `Reconnecting in ${seconds} s · attempt ${reconnect.attempt}`;
 }

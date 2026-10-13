@@ -1,11 +1,11 @@
-import type { AssistantStatus, ServerFrame, SourceView } from "@waypoint-ai/shared";
+import type { AssistantStatus, ClientFrame, ServerFrame, SourceView } from "@waypoint-ai/shared";
 
 export type ConnectionState = "connecting" | "connected" | "disconnected";
-export type Capabilities = { assistantStatus: AssistantStatus; modelLabel: string | null; demoMode: boolean };
+export type Capabilities = { assistantStatus: AssistantStatus; modelLabel: string | null; demoMode: boolean; voiceInput?: boolean };
 export type RoutePlan = { distanceMeters: number; durationSeconds: number; order: number[]; geometry: GeoJSON.LineString };
 
-const apiBase = import.meta.env.VITE_API_BASE ?? "";
-const websocketUrl = resolveWebSocketUrl();
+export const apiBase = import.meta.env.VITE_API_BASE ?? "";
+export const websocketUrl = resolveWebSocketUrl();
 
 function resolveWebSocketUrl(): string {
   const configured = import.meta.env.VITE_WS_URL;
@@ -45,17 +45,8 @@ export async function buildRoute(points: Array<{ lat: number; lon: number }>, si
   return response.json() as Promise<RoutePlan>;
 }
 
-export function connectAssistant(
-  onFrame: (frame: ServerFrame) => void,
-  onConnection: (state: ConnectionState) => void,
-  onOpen: (socket: WebSocket) => void,
-): WebSocket {
-  const socket = new WebSocket(websocketUrl);
-  socket.addEventListener("open", () => { onConnection("connected"); onOpen(socket); });
-  socket.addEventListener("close", () => onConnection("disconnected"));
-  socket.addEventListener("error", () => onConnection("disconnected"));
-  socket.addEventListener("message", (event: MessageEvent<string>) => {
-    try { onFrame(JSON.parse(event.data) as ServerFrame); } catch { onConnection("disconnected"); }
-  });
-  return socket;
+export function sendClientFrame(socket: WebSocket | null, frame: ClientFrame): boolean {
+  if (socket?.readyState !== WebSocket.OPEN) return false;
+  socket.send(JSON.stringify(frame));
+  return true;
 }

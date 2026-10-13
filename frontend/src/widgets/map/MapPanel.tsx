@@ -1,11 +1,11 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { ArrowUpRight, ChevronDown, Clock3, MapPin, Navigation, Route, RotateCw } from "lucide-react";
-import { CircleMarker, GeoJSON as LeafletGeoJSON, MapContainer, Popup, TileLayer, Tooltip, useMap, useMapEvents } from "react-leaflet";
-import { latLngBounds, type LatLngBounds } from "leaflet";
-import type { PlaceView, RecordView, TripPlan } from "@waypoint-ai/shared";
+import { Circle, CircleMarker, GeoJSON as LeafletGeoJSON, MapContainer, Popup, TileLayer, Tooltip, useMap, useMapEvents } from "react-leaflet";
+import { latLng, latLngBounds, type LatLngBounds, type LeafletEvent, type Map as LeafletMap } from "leaflet";
+import type { PlaceView, RecordView, SourceView, TripPlan } from "@waypoint-ai/shared";
 import type { Feature, Geometry } from "geojson";
 import { buildRoute } from "../../shared/api/client";
-import { translate, type Language } from "../../shared/i18n";
+import { formatKm, translate, type Language } from "../../shared/i18n";
 import "leaflet/dist/leaflet.css";
 import RouteLayer, { RouteGeometry, type RoutePoint, type RouteState } from "./RouteLayer";
 
@@ -60,8 +60,100 @@ function ViewportPlaces({ onPlaces, sourceIds, enabled }: { onPlaces: (places: M
   return null;
 }
 
+// Overlay colors are chosen to stay distinct from orange events, green places, and the green basemap.
+const RADIUS_COLOR = "#2f7cf6";
+const COUNTRY_BORDER_COLOR = "#a855f7";
+
+export type SearchRadius = {
+  lat: number;
+  lon: number;
+  radiusKm: number;
+  label: string;
+};
+
+/** A point to center on; the revision changes for every request, including the same point twice. */
+export type MapFocusPoint = {
+  lat: number;
+  lon: number;
+  revision: number;
+};
+
+/** Source mode per record source ID; "unverified" when the source metadata is missing. */
+export type RecordSourceModes = Record<string, SourceView["mode"] | "unverified">;
+
+/** Draws the applied search radius and fits the map to it whenever the radius or its center changes. */
+function RadiusOverlay({ radius, language }: { radius: SearchRadius; language: Language }) {
+  const map = useMap();
+  const signature = `${radius.lat},${radius.lon},${radius.radiusKm}`;
+  useEffect(() => {
+    const bounds = latLng(radius.lat, radius.lon).toBounds(radius.radiusKm * 2000);
+    map.fitBounds(bounds, { padding: [24, 24], animate: false });
+    map.getContainer().scrollIntoView({ block: "nearest", behavior: "smooth" });
+    // The signature captures every value the fit depends on.
+  }, [map, signature]);
+  const center: [number, number] = [radius.lat, radius.lon];
+  const label = radius.label
+    ? `${formatKm(radius.radiusKm, language)} · ${radius.label}`
+    : formatKm(radius.radiusKm, language);
+  return (
+    <>
+      <Circle
+        center={center}
+        radius={radius.radiusKm * 1000}
+        interactive={false}
+        pathOptions={{ color: RADIUS_COLOR, weight: 2.5, opacity: 0.95, fillColor: RADIUS_COLOR, fillOpacity: 0.07 }}
+      />
+      <CircleMarker
+        center={center}
+        radius={4}
+        interactive={false}
+        pathOptions={{ color: "#ffffff", weight: 2, fillColor: RADIUS_COLOR, fillOpacity: 1 }}
+      >
+        <Tooltip permanent direction="top" offset={[0, -6]} className="radius-label">{label}</Tooltip>
+      </CircleMarker>
+    </>
+  );
+}
+
+/** Centers the map on a point chosen from the details dialog; the revision re-centers on repeated requests. */
+function FocusPoint({ focus }: { focus: MapFocusPoint }) {
+  const map = useMap();
+  useEffect(() => {
+    map.setView([focus.lat, focus.lon], Math.max(map.getZoom(), 14), { animate: true });
+    // On narrow screens the map sits below the list; bring it into view after the dialog closes.
+    map.getContainer().scrollIntoView({ block: "nearest", behavior: "smooth" });
+    // The revision changes for every request, including the same point twice.
+  }, [map, focus.revision]);
+  return null;
+}
+
+/** Investigation view: frame the selected event together with its linked places instead of zooming to street level. */
+function FitToSelection({ selected, places }: { selected: MapItem | undefined; places: PlaceView[] }) {
+  const map = useMap();
+  const signature = selected ? `${selected.key}|${places.map((place) => place.id).join(",")}` : "";
+  useEffect(() => {
+    if (!selected) return;
+    const points: Array<[number, number]> = [
+      [selected.lat, selected.lon],
+      ...places.map((place): [number, number] => [place.lat, place.lon]),
+    ];
+    if (points.length === 1) {
+      map.setView(points[0]!, Math.max(map.getZoom(), 11), { animate: false });
+      return;
+    }
+    map.fitBounds(latLngBounds(points), { padding: [48, 48], maxZoom: 14, animate: false });
+    // The signature captures the selection and the loaded places.
+  }, [map, signature]);
+  return null;
+}
+
 function ZoomLevel({ onZoom, selected }: { onZoom: (zoom: number) => void; selected: MapItem | undefined }) {
-  const map = useMapEvents({ zoomend: (event) => onZoom(event.target.getZoom()) });
+  // Stable handlers: useMapEvents re-subscribes when the object changes, and a zoom fired by a sibling's
+  // fit effect during that re-subscription was lost, leaving the zoom label stale.
+  const handlers = useMemo(() => ({
+    zoomend: (event: LeafletEvent) => onZoom((event.target as LeafletMap).getZoom()),
+  }), [onZoom]);
+  const map = useMapEvents(handlers);
   useEffect(() => onZoom(map.getZoom()), [map, onZoom]);
   const selectedKey = selected?.key;
   const selectedLat = selected?.lat;
@@ -72,6 +164,13 @@ function ZoomLevel({ onZoom, selected }: { onZoom: (zoom: number) => void; selec
     }
   }, [map, selectedKey, selectedLat, selectedLon]);
   return null;
+}
+
+/** Records from a source that is neither live nor a public snapshot (synthetic or unverified) get a dashed outline. */
+function isUnverifiedRecord(item: MapItem, recordSourceModes: RecordSourceModes): boolean {
+  if (item.kind !== "record") return false;
+  const mode = recordSourceModes[item.sourceId];
+  return Boolean(mode) && mode !== "approved_live" && mode !== "public_snapshot";
 }
 
 function FitToResults({ items }: { items: MapItem[] }) {
@@ -133,7 +232,43 @@ function FitToFocus({ focusKey, requestRevision, points, routePlan }: { focusKey
   return null;
 }
 
-export default function MapPanel({ language = "en", highlights = [], records = [], tripPlan = null, sourceIds = [], selectedResultKey, onSelectResult, sourceLabels = {}, sourceDates = {}, resultsLoaded = false, resetViewportRevision = 0 }: { language?: Language; highlights?: PlaceView[]; records?: RecordView[]; tripPlan?: TripPlan | null; sourceIds?: string[]; selectedResultKey: string | null; onSelectResult: (key: string) => void; sourceLabels?: Record<string, string>; sourceDates?: Record<string, string>; resultsLoaded?: boolean; resetViewportRevision?: number }) {
+type MapPanelProps = {
+  language?: Language;
+  highlights?: PlaceView[];
+  records?: RecordView[];
+  tripPlan?: TripPlan | null;
+  sourceIds?: string[];
+  selectedResultKey: string | null;
+  onSelectResult: (key: string) => void;
+  sourceLabels?: Record<string, string>;
+  sourceDates?: Record<string, string>;
+  resultsLoaded?: boolean;
+  resetViewportRevision?: number;
+  /** "investigation" shows only markers; the page renders its own table and details. */
+  variant?: "assistant" | "investigation";
+  recordSourceModes?: RecordSourceModes;
+  radius?: SearchRadius | null;
+  focus?: MapFocusPoint | null;
+};
+
+export default function MapPanel({
+  language = "en",
+  highlights = [],
+  records = [],
+  tripPlan = null,
+  sourceIds = [],
+  selectedResultKey,
+  onSelectResult,
+  sourceLabels = {},
+  sourceDates = {},
+  resultsLoaded = false,
+  resetViewportRevision = 0,
+  variant = "assistant",
+  recordSourceModes = {},
+  radius = null,
+  focus = null,
+}: MapPanelProps) {
+  const investigation = variant === "investigation";
   const [places, setPlaces] = useState<MapPlace[]>([]);
   const [total, setTotal] = useState(0);
   const [zoom, setZoom] = useState(4);
@@ -209,35 +344,53 @@ export default function MapPanel({ language = "en", highlights = [], records = [
     setDayRouteStates((current) => current[day]?.status === state.status && current[day]?.plan === state.plan ? current : { ...current, [day]: state });
   }, []);
   const t = (ru: string, en: string) => translate(language, ru, en);
+  const toolbarEyebrow = investigation
+    ? t("СОБЫТИЯ · OPENSTREETMAP", "EVENTS · OPENSTREETMAP")
+    : <>OPENSTREETMAP · {t("ЕВРОПА · 6 РЕГИОНОВ", "EUROPE · 6 REGIONS")}</>;
+  const toolbarTitle = investigation
+    ? t("События и места рядом", "Events and nearby places")
+    : t("Места и адреса", "Places and addresses");
+  // In the investigation view, nearby-place highlights must not refit the whole result set.
+  const fitItems = investigation ? resultItems.filter((item) => item.kind === "record") : resultItems;
+  const selectedRecord = selectedItem?.kind === "record" ? selectedItem : undefined;
   return (
     <section className="map-panel" aria-label={t("Карта и результаты", "Map and results")}>
-      <div className="map-toolbar"><div><span className="eyebrow">OPENSTREETMAP · {t("ЕВРОПА · 6 РЕГИОНОВ", "EUROPE · 6 REGIONS")}</span><h2>{t("Места и адреса", "Places and addresses")}</h2></div><span className="map-cap">{t("зум", "zoom")} {zoom}+</span></div>
+      <div className="map-toolbar">
+        <div>
+          <span className="eyebrow">{toolbarEyebrow}</span>
+          <h2>{toolbarTitle}</h2>
+        </div>
+        <span className="map-cap">{t("зум", "zoom")} {zoom}+</span>
+      </div>
       <div className="map-canvas">
         <MapContainer center={[49.8, 15.5]} zoom={zoom} minZoom={3} maxZoom={19} scrollWheelZoom>
           <MapSizeObserver />
           <ResetViewport revision={resetViewportRevision} />
-          <FitToResults items={resultItems} />
+          <FitToResults items={fitItems} />
           <FitToFocus focusKey={focusedDay === null ? null : String(focusedDay)} requestRevision={focusRevision} points={focusPoints} routePlan={focusRoute} />
-          <ViewportPlaces onPlaces={handlePlaces} sourceIds={sourceIds} enabled={resultItems.length === 0} />
-          <ZoomLevel onZoom={handleZoom} selected={selectedItem} />
+          <ViewportPlaces onPlaces={handlePlaces} sourceIds={sourceIds} enabled={!investigation && resultItems.length === 0} />
+          <ZoomLevel onZoom={handleZoom} selected={investigation ? undefined : selectedItem} />
+          {investigation && <FitToSelection selected={selectedRecord} places={highlights} />}
+          {investigation && focus && <FocusPoint focus={focus} />}
+          {radius && <RadiusOverlay radius={radius} language={language} />}
           {tileUrl && <TileLayer url={tileUrl} attribution='&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap contributors</a>' />}
-          {countryBoundaries.map(({ code, feature }) => <LeafletGeoJSON key={code} data={feature} style={{ color: "#f0bb69", weight: 2, opacity: 0.95, fillColor: "#e4aa55", fillOpacity: 0.08, dashArray: "5 5" }} interactive={false} />)}
-          {tripPlan ? tripRouteInputs.map((route) => route.routeStatus === "pending" && <TripRouteLayer key={`${tripPlan.totalDays}:${route.day}:${route.points.map((point) => point.id).join(",")}`} day={route.day} points={route.points} retryKey={dayRouteRetryKeys[route.day] ?? 0} onState={handleDayRouteState} />) : <RouteLayer points={routePoints} retryKey={routeRetryKey} onState={handleRouteState} />}
-          {tripPlan ? tripRouteInputs.map((route) => <RouteGeometry key={`geometry-${route.day}`} plan={focusedDay !== null && (focusedDay !== "city" ? focusedDay !== route.day : route.area !== "city") ? null : dayRouteStates[route.day]?.plan ?? null} points={focusedDay !== null && (focusedDay !== "city" ? focusedDay !== route.day : route.area !== "city") ? [] : dayRouteStates[route.day]?.orderedPoints ?? []} color={routeColors[(route.day - 1) % routeColors.length]} />) : <RouteGeometry plan={routeState.plan} points={routeState.orderedPoints} />}
+          {countryBoundaries.map(({ code, feature }) => <LeafletGeoJSON key={code} data={feature} style={{ color: COUNTRY_BORDER_COLOR, weight: 1.5, opacity: 0.9, fillColor: COUNTRY_BORDER_COLOR, fillOpacity: 0.02, dashArray: "4 6" }} interactive={false} />)}
+          {tripPlan ? tripRouteInputs.map((route) => route.routeStatus === "pending" && <TripRouteLayer key={`${tripPlan.totalDays}:${route.day}:${route.points.map((point) => point.id).join(",")}`} day={route.day} points={route.points} retryKey={dayRouteRetryKeys[route.day] ?? 0} onState={handleDayRouteState} />) : !investigation && <RouteLayer points={routePoints} retryKey={routeRetryKey} onState={handleRouteState} />}
+          {tripPlan ? tripRouteInputs.map((route) => <RouteGeometry key={`geometry-${route.day}`} plan={focusedDay !== null && (focusedDay !== "city" ? focusedDay !== route.day : route.area !== "city") ? null : dayRouteStates[route.day]?.plan ?? null} points={focusedDay !== null && (focusedDay !== "city" ? focusedDay !== route.day : route.area !== "city") ? [] : dayRouteStates[route.day]?.orderedPoints ?? []} color={routeColors[(route.day - 1) % routeColors.length]} />) : !investigation && <RouteGeometry plan={routeState.plan} points={routeState.orderedPoints} />}
           {mapItems.map((item) => {
             const selected = item.key === selectedResultKey;
             const focused = focusedPlaceIds.has(item.id);
-            return <CircleMarker key={item.key} center={[item.lat, item.lon]} radius={focused ? 10 : selected ? 11 : item.kind === "record" || highlights.some((place) => place.id === item.id) ? 7 : 4} eventHandlers={{ click: () => onSelectResult(item.key) }} pathOptions={{ color: focused || selected ? "#ffffff" : item.kind === "record" ? "#ffe0a8" : "#8bdbb3", fillColor: focused ? "#31b57f" : selected ? "#58d9a0" : item.kind === "record" ? "#d8844a" : "#45a77c", fillOpacity: 0.95, weight: focused || selected ? 3 : 1 }}>
-              <Popup><strong>{item.name}</strong><br /><small>{item.category ?? (item.kind === "place" ? t("Место", "Place") : t("Запись", "Record"))}</small>{item.summary && <><br />{item.summary}</>}</Popup>
+            return <CircleMarker key={item.key} center={[item.lat, item.lon]} radius={focused ? 10 : selected ? 11 : item.kind === "record" || highlights.some((place) => place.id === item.id) ? 7 : 4} eventHandlers={{ click: () => onSelectResult(item.key) }} pathOptions={{ dashArray: isUnverifiedRecord(item, recordSourceModes) ? "3 3" : undefined, color: focused || selected ? "#ffffff" : item.kind === "record" ? "#ffe0a8" : "#8bdbb3", fillColor: focused ? "#31b57f" : selected ? "#58d9a0" : item.kind === "record" ? "#d8844a" : "#45a77c", fillOpacity: 0.95, weight: focused || selected ? 3 : 1 }}>
+              <Popup><strong>{item.name}</strong><br /><small>{item.category ?? (item.kind === "place" ? t("Место", "Place") : t("Запись", "Record"))}</small>{item.summary && <><br />{item.summary}</>}{investigation && <><br /><small>{t("Источник", "Source")}: {sourceLabels[item.sourceId] ?? `${item.sourceId} (${t("не проверен", "unverified")})`}</small></>}</Popup>
               {focused && <Tooltip permanent direction="top" offset={[0, -8]} className="focused-stop-label">{focusedPlaceOrder.get(item.id)}</Tooltip>}
             </CircleMarker>;
           })}
         </MapContainer>
         {countryBoundaries.length > 0 && <div className="boundary-legend"><span aria-hidden="true" />{t("Страны:", "Countries:")} {countryBoundaries.map(({ code }) => countryName(code, language)).join(" · ")}{tripPlan && <><span className="city-focus-dot" aria-hidden="true" />{t("Точки города:", "City points:")} {tripPlan.city}{focusedDay === "city" ? ` · ${focusPoints.length}` : focusedDay !== null ? ` · ${t("день", "day")} ${focusedDay}` : ""}</>}</div>}
-        {!tripPlan && routeState.status !== "idle" && <RouteSummary language={language} state={routeState} totalPoints={routeCandidates.total} expanded={routeExpanded} onToggle={() => setRouteExpanded((value) => !value)} onRetry={() => setRouteRetryKey((value) => value + 1)} />}
+        {!tripPlan && !investigation && routeState.status !== "idle" && <RouteSummary language={language} state={routeState} totalPoints={routeCandidates.total} expanded={routeExpanded} onToggle={() => setRouteExpanded((value) => !value)} onRetry={() => setRouteRetryKey((value) => value + 1)} />}
       </div>
       {tripPlan && <TripPlanBoard language={language} plan={tripPlan} highlights={highlights} routeStates={dayRouteStates} sourceLabels={sourceLabels} sourceDates={sourceDates} focusedDay={focusedDay} selectedPlaceId={selectedItem?.kind === "place" ? selectedItem.id : null} onSelectDay={(day) => { setFocusedDay(day); setFocusRevision((revision) => revision + 1); const failed = day !== "city" && dayRouteStates[day]?.status === "error"; if (failed) setDayRouteRetryKeys((current) => ({ ...current, [day]: (current[day] ?? 0) + 1 })); }} onSelectPlace={(id) => onSelectResult(`place:${id}`)} />}
-      {!tripPlan && <section className="server-results" aria-label={t("Результаты запроса", "Query results")}>
+      {!tripPlan && !investigation && <section className="server-results" aria-label={t("Результаты запроса", "Query results")}>
         <div className="server-results-heading"><strong>{t("Результаты запроса", "Query results")}</strong><span>{resultItems.length.toLocaleString(language === "ru" ? "ru-RU" : language === "de" ? "de-DE" : "en-US")}</span></div>
         {resultItems.length ? <div className="server-results-list">
           {resultItems.map((item) => <button type="button" key={item.key} className={`server-result${selectedResultKey === item.key ? " selected" : ""}`} aria-pressed={selectedResultKey === item.key} onClick={() => onSelectResult(item.key)}>
@@ -247,13 +400,13 @@ export default function MapPanel({ language = "en", highlights = [], records = [
           </button>)}
         </div> : <p className="server-results-empty">{resultsLoaded ? t("По этому запросу совпадений не найдено.", "No matches found for this query.") : t("Результаты сервера появятся здесь после запроса.", "Server results will appear here after a query.")}</p>}
       </section>}
-      {selectedItem && <SelectedItemCard language={language} item={selectedItem} sourceLabel={sourceLabels[selectedItem.sourceId] ?? selectedItem.sourceId} tripContext={tripPlan ? getTripContext(selectedItem.id, tripPlan, dayRouteStates) : null} />}
-      {!tripPlan && <div className="results-footer"><div><strong>{resultItems.length ? t("Точки запроса", "Query points") : t("Места в области карты", "Places in map area")}</strong><span>{resultItems.length ? t("Показаны найденные объекты", "Showing query matches") : zoom < 8 ? t("Увеличьте карту для поиска", "Zoom in to search") : places.length < total ? `${t("Показаны первые", "Showing first")} ${places.length}` : t("Локальная выгрузка", "Local extract")}</span></div><span className="result-count">{(resultItems.length || total).toLocaleString(language === "ru" ? "ru-RU" : language === "de" ? "de-DE" : "en-US")}</span></div>}
+      {selectedItem && !investigation && <SelectedItemCard language={language} item={selectedItem} sourceLabel={sourceLabels[selectedItem.sourceId] ?? selectedItem.sourceId} tripContext={tripPlan ? getTripContext(selectedItem.id, tripPlan, dayRouteStates) : null} />}
+      {!tripPlan && !investigation && <div className="results-footer"><div><strong>{resultItems.length ? t("Точки запроса", "Query points") : t("Места в области карты", "Places in map area")}</strong><span>{resultItems.length ? t("Показаны найденные объекты", "Showing query matches") : zoom < 8 ? t("Увеличьте карту для поиска", "Zoom in to search") : places.length < total ? `${t("Показаны первые", "Showing first")} ${places.length}` : t("Локальная выгрузка", "Local extract")}</span></div><span className="result-count">{(resultItems.length || total).toLocaleString(language === "ru" ? "ru-RU" : language === "de" ? "de-DE" : "en-US")}</span></div>}
     </section>
   );
 }
 
-const routeColors = ["#41cda0", "#e0a84d", "#75a8ff", "#c78bff"];
+const routeColors = ["#41cda0", "#e0a84d", "#75a8ff", "#c78bff", "#ef7f7f", "#5fd0e8", "#d6d65a"];
 
 function TripRouteLayer({ day, points, retryKey, onState }: { day: number; points: RoutePoint[]; retryKey: number; onState: (day: number, state: RouteState) => void }) {
   const signature = points.map((point) => `${point.id}:${point.lat},${point.lon}`).join("|");
@@ -351,7 +504,7 @@ function SelectedItemCard({ language, item, sourceLabel, tripContext }: { langua
     ? Object.entries(item.record.attributes).filter(([, value]) => value === null || ["string", "number", "boolean"].includes(typeof value)).slice(0, 8)
     : [];
   return <section className="selected-item-card" aria-label={t("Карточка выбранного объекта", "Selected item details")}>
-    <div className="selected-item-heading"><span className="selected-item-icon">{item.kind === "record" ? <Clock3 size={16} /> : <MapPin size={16} />}</span><div><span className="eyebrow">{item.kind === "record" ? t("ДЕМО-ЗАПИСЬ", "DEMO RECORD") : t("МЕСТО НА КАРТЕ", "MAP PLACE")}</span><h3>{item.name}</h3></div></div>
+    <div className="selected-item-heading"><span className="selected-item-icon">{item.kind === "record" ? <Clock3 size={16} /> : <MapPin size={16} />}</span><div><span className="eyebrow">{item.kind === "record" ? t("ЗАПИСЬ", "RECORD") : t("МЕСТО НА КАРТЕ", "MAP PLACE")}</span><h3>{item.name}</h3></div></div>
     <dl className="selected-item-grid">
       {tripContext && <div className="selected-item-wide selected-trip-context"><dt>{t("В плане поездки", "Trip plan")}</dt><dd>{t(`День ${tripContext.day} · точка ${tripContext.stop} из ${tripContext.totalStops}`, `Day ${tripContext.day} · stop ${tripContext.stop} of ${tripContext.totalStops}`)} · {tripContext.area === "airport_radius" ? t("район аэропорта", "airport area") : item.place?.city ?? t("город", "city")}</dd></div>}
       <div><dt>{t("Категория", "Category")}</dt><dd>{item.category ?? t("Не указана", "Not specified")}</dd></div>

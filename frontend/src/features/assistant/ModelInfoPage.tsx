@@ -12,7 +12,7 @@ export default function ModelInfoPage({ language, modelLabel, ready }: ModelInfo
   const t = (ru: string, en: string) => translate(language, ru, en);
   const model = modelLabel ?? "qwen3:4b-instruct-2507-q4_K_M";
   const toolCards = [
-    { icon: Search, name: "search_records", description: t("Ищет записи по словам, категории и периоду, если источник записей подключён. По умолчанию такие данные в демо не загружаются.", "Searches records by keyword, category, and date range when a record source is configured. No record dataset is loaded by default.") },
+    { icon: Search, name: "search_records", description: t("Ищет записи по словам, категории и периоду, включая импортированные землетрясения INGV.", "Searches records by keyword, category, and date range, including imported INGV earthquake events.") },
     { icon: Database, name: "get_record_details", description: t("Показывает подробности одной записи по точному идентификатору.", "Loads the details of one record by its exact ID.") },
     { icon: MapPinned, name: "search_places", description: t("Ищет реальные места из снимков OpenStreetMap по названию, категории, стране или городу.", "Finds real places in OpenStreetMap snapshots by name, category, country, or city.") },
     { icon: Globe2, name: "list_sources", description: t("Возвращает доступные источники, их охват, даты и сведения об атрибуции.", "Lists available sources, their coverage, snapshot dates, and attribution.") },
