@@ -1,10 +1,10 @@
-# Code review: Investigation Workspace
+# Known issues and fixes
 
-Status: review of the investigation feature diff (Phase 5). Two independent reviewers read the code: one covered the backend (security, data integrity, concurrency, contracts) and one the frontend (async state, provenance, accessibility). Every finding below was checked against the code before it was fixed or left open. Unrelated uncommitted work in the tree (the voice feature) was out of scope.
+This is the issue log for the event explorer and the parts of the assistant it touches: what was found while building and testing it, how each issue was fixed, and what is still open. Each entry was checked against the code before it was fixed or left open.
 
-Verification after the fixes: `npm test` passes 77 tests (8 skipped database tests), `npm run test:db` passes 8 PostgreSQL tests on a disposable database, `npm run typecheck` and `npm run build` pass without warnings, and a live INGV import ran successfully against the new HTTP code.
+Current verification: `npm test` and `npm run test:db` (PostgreSQL, disposable database) pass in CI together with `npm run typecheck` and `npm run build`; a live INGV import runs against the HTTP code.
 
-No Critical findings. No SQL injection was found: every value is a bind parameter and dynamic SQL fragments are constants. The external source URL comes only from an allowlisted environment value.
+No SQL injection was found: every value is a bind parameter and dynamic SQL fragments are constants. The external source URL comes only from an allowlisted environment value.
 
 ## High
 
@@ -18,14 +18,14 @@ No Critical findings. No SQL injection was found: every value is a bind paramete
 | # | Area and path | Issue | Impact | Resolution |
 |---|---|---|---|---|
 | M1 | Null revisions — `backend/src/sources/ingv/ingv.adapter.ts` | Events without `originId` got `revision: null`, and `NULL IS DISTINCT FROM NULL` is false. | Corrections to such events would never be stored. | **Fixed.** A content hash of the normalized fields is used as the revision. Test added. |
-| M2 | Interrupted imports — `backend/src/server.ts`, `backend/src/data/event-import.repository.ts` | A process exit during an import left the run `running`. | The unique "one running import" index blocked the source for up to 30 minutes. | **Fixed.** On startup, runs left `running` are marked failed with `interrupted`. The 30-minute stale rule stays as a backstop. |
+| M2 | Interrupted imports — `backend/src/server.ts`, `backend/src/data/event-import.repository.ts` | A process exit during an import left the run `running`. | The unique "one running import" index blocked the source for up to 30 minutes. | **Fixed.** The fetch phase has a 15-minute deadline, below the 30-minute stale limit. On startup, only runs older than the stale limit are marked `interrupted`, so a CLI import running next to the API is left alone. |
 | M3 | Body download timeout — `backend/src/sources/http.ts` | The response body was read after the retry loop. | A timeout while downloading a large body was recorded as `import_failed` and not retried. | **Fixed.** The body is read inside each attempt, so the existing retry and `upstream_timeout` mapping apply. Test added. |
 | M4 | Rate limiting behind a proxy — `backend/src/api/rate-limit.ts`, `backend/src/server.ts` | Limits are keyed on `request.ip`, and `trust proxy` was not configured. | Behind a reverse proxy every client shares one bucket. Setting `trust proxy` to `true` would make the limit spoofable. | **Fixed.** `TRUST_PROXY` env (default `false`, or a hop count 1–5; `true` is rejected). Documented in `.env.example`. |
 | M5 | Settlement lookup cost — `backend/src/data/investigation.repository.ts` | The case-insensitive name match could not use an index. | One query took 589 ms with a primary-key scan plan. | **Fixed.** New migration `20261013010000-add-settlement-name-indexes.cjs` adds partial expression indexes on settlement rows only. The query now lists its categories as literals so they match. Measured at 0.13 ms. The migration was tested with undo and redo. |
 | M6 | `/data/sources` coupling — `backend/src/data/source.repository.ts` | The source list now also queried `source_sync_runs`, inside a catch-all. | A failure in the sync lookup would return an empty source list to the existing assistant UI. | **Fixed.** The sync lookup has its own fallback, so sources are returned with `lastSync: null`. |
 | M7 | Malformed JSON — `backend/src/server.ts` | Body-parser errors went to the generic 500 handler. | Contract violation (400 documented) and noisy stack-trace logs. | **Fixed.** `backend/src/api/error-handler.ts` maps parse errors to `400 invalid_json` and oversize bodies to `413`. Test added. |
 | M8 | Source status freshness — `InvestigationWorkspace.tsx` | Sources were loaded once at app start, and a load failure was shown as "no sources imported". | Sync status and failed-import warnings were stale, and errors looked like an empty state. | **Fixed.** The page loads sources itself, reloads them on Refresh, and shows a distinct error state. A running import is labelled. |
-| M9 | Provenance fail-open — `EventTable.tsx`, `EventDetails.tsx`, `MapPanel.tsx` | An event whose source metadata was missing looked like ordinary data, and map markers had no provenance cue. | Synthetic or unknown-origin data could be mistaken for real observations. | **Fixed.** Unknown sources are tagged "Unverified" with a warning. Synthetic or unverified markers have a dashed outline. The investigation popup shows the source. |
+| M9 | Provenance fail-open — `EventTable.tsx`, `EventDetails.tsx`, `MapPanel.tsx` | An event whose source metadata was missing looked like ordinary data, and map markers had no provenance cue. | Synthetic or unknown-origin data could be mistaken for real observations. | **Fixed.** Unknown sources are tagged "Unverified" with a warning. Synthetic or unverified markers have a dashed outline. The event explorer popup shows the source. |
 | M10 | Accessibility — `EventTable.tsx`, `EventDetails.tsx`, `QueryBar.tsx`, `EventFilters.tsx`, `styles.css` | Invalid `aria-selected` on a plain table row. No focus-visible style. Details appeared silently below the table. The query input was `disabled` while running, which dropped focus. The filter group had no role. | Keyboard and screen-reader users lost selection state and focus. | **Fixed.** The row button carries `aria-current` and has a `:focus-visible` outline. Details headings receive focus and scroll into view. The input is `readOnly` with `aria-busy`. Filters use `role="group"`. |
 | M11 | Flash on refresh — `InvestigationWorkspace.tsx` | Every filter change cleared the table and map before the new page arrived. | Visible flicker and lost scroll position. | **Fixed.** Previous rows stay visible with an "updating…" note and `aria-busy` until the new page arrives. |
 
@@ -39,7 +39,7 @@ No Critical findings. No SQL injection was found: every value is a bind paramete
 | L4 | Empty query values — `backend/src/api/investigation-params.ts` | `minMagnitude=` was coerced to 0, and `bbox=1,2,,4` was accepted. | **Fixed.** Empty values are treated as absent and empty bbox parts are rejected. Tests added. |
 | L5 | Contract gaps — `contracts/openapi.yaml` | `fallbackReason` in the 422 body was untyped, and 400 `invalid_json`, 415, and the generic 500 were undocumented. | **Fixed** and types regenerated. |
 | L6 | Error messages — `frontend/src/features/investigation/format.ts`, `InvestigationWorkspace.tsx` | Some server codes fell through to "Could not load data", and the 422 `fallbackReason` was ignored. | **Fixed.** |
-| L7 | "DEMO RECORD" label — `frontend/src/widgets/map/MapPanel.tsx` | The assistant card label changed to "RECORD". The reviewer asked whether this removed a provenance cue. | **No change needed.** Records are no longer demo-only. The same card shows the source label, and the synthetic source's label says "offline demo, not real data". |
+| L7 | "DEMO RECORD" label — `frontend/src/widgets/map/MapPanel.tsx` | The assistant card label changed to "RECORD", which could look like a lost provenance cue. | **No change needed.** Records are no longer demo-only. The same card shows the source label, and the synthetic source's label says "offline demo, not real data". |
 | L8 | Cursor precision — `backend/src/data/investigation.repository.ts` | The cursor carries milliseconds while `timestamptz` stores microseconds. | **Open (latent).** Imported data is millisecond-precise. Rows written with sub-millisecond times by a future source could be skipped at a page boundary. Fix by carrying microseconds in the cursor when such a source is added. |
 | L9 | Partial-failure counts — `backend/src/services/event-import.ts` | If a later upsert batch fails, earlier committed batches are not reflected in the failed run's counts. | **Open.** Data stays consistent and the next run counts those rows as skipped. Per-batch count updates would make the audit row exact. |
 | L10 | Cooldown race — `backend/src/services/event-import.ts` | The cooldown check and run start are not atomic. | **Open, bounded.** The partial unique index still prevents two concurrent running imports; at worst two sequential imports run closer together than the cooldown. |
@@ -67,7 +67,7 @@ No Critical findings. No SQL injection was found: every value is a bind paramete
 
 ## End-to-end QA pass
 
-After the review, the feature was exercised end to end: 30 natural-language queries against the live model (EN/RU/DE, exonyms, selections, limits, off-topic text, prompt injection), the same parser with the model unavailable, concurrent query and chat requests, chat flows over the WebSocket, and 29 browser scenarios (states, errors, pagination, keyboard, languages, mobile width, regressions).
+The feature was exercised end to end: 30 natural-language queries against the live model (EN/RU/DE, exonyms, selections, limits, off-topic text, prompt injection), the same parser with the model unavailable, concurrent query and chat requests, chat flows over the WebSocket, and 29 browser scenarios (states, errors, pagination, keyboard, languages, mobile width, regressions).
 
 | # | Severity | Finding | Resolution |
 |---|---|---|---|
@@ -79,7 +79,20 @@ After the review, the feature was exercised end to end: 30 natural-language quer
 | Q6 | Low | With the model unavailable, the rule parser treated "weather in Rome" as an event search. | **Fixed.** Rules require an event word or a numeric/selection constraint. |
 | Q7 | Low | The model mapped "this week" to 720 hours. | **Fixed** by explicit period rules in the prompt; re-verified (168 h). |
 | Q8 | Low | German period labels and counters stayed in English. | **Fixed** with explicit three-language strings. |
-| Q9 | Low | On narrow screens the investigation panel scrolls inside the page. | **Open.** Functional; layout polish. |
+| Q9 | Low | On narrow screens the event explorer panel scrolls inside the page. | **Open.** Functional; layout polish. |
 | Q10 | Info | Chat turns that need two model calls take 70–130 s on this CPU-only machine; a client that disconnects early can leave Ollama busy for the next request. | **Open (environment).** Matches L12; a GPU or a smaller context reduces latency. The query endpoint itself takes 8–12 s. |
 
 Results after the fixes: 79 unit and route tests and 8 PostgreSQL tests pass; typecheck and build pass; the live query matrix shows no validation or safety failures; all browser scenarios pass.
+
+## Hardening pass
+
+| # | Severity | Finding | Resolution |
+|---|---|---|---|
+| R1 | Medium | Voice input relays audio to a paid provider, and sessions were limited only to one per connection. Many connections from one client could run up the provider bill. | **Fixed.** `backend/src/voice/voice-budget.ts`: a process-wide cap on open sessions plus a per-client hourly budget of sessions and reserved seconds (`VOICE_*` settings). Refusals use the `rate_limited` voice error. Forwarded addresses count only with `TRUST_PROXY`. Tests added. |
+| R2 | Medium | `model/ollama/scripts/serve.sh` cleared `OLLAMA_VULKAN` before reading it, so the flag from the environment was ignored. | **Fixed.** Flags are read first, then cleared. |
+| R3 | Medium | PostgreSQL logic (radius search, keyset pagination, place linking, approximate city lookup) ran only locally, and generated OpenAPI types could drift from the contract unnoticed. | **Fixed.** CI starts PostgreSQL 17, runs `npm run test:db`, and fails when `contracts:types` changes the generated file. |
+| R4 | Low | "12 days in Roma" was read as 2 days. | **Fixed.** Day counts take up to two digits and are capped at the 7-day limit. Test added. |
+| R5 | Low | Numbers filled from the user text were merged after validation, so a filled minimum magnitude could exceed the model's maximum. | **Fixed.** The merged arguments are validated again; on failure the model's arguments are kept. Test added. |
+| R6 | Low | Every capitalized word in a trip request became a sequential database lookup. | **Fixed.** At most 8 candidates, looked up in parallel and once per turn. Test added. |
+| R7 | Low | Smaller gaps: the realtime connect timer kept running after an abort; source responses were buffered without a size limit; the chat's category filter did not reach event searches. | **Fixed.** Timer cleared on abort; bodies above 20 MB are rejected as `upstream_malformed`; the scope category narrows event searches. Tests added where the behaviour is observable. |
+| R8 | Medium | The chat model saw 8 of 68 matching events and summarized them as the whole result (a wrong magnitude range), and it guessed a compass direction from the search center. | **Fixed.** The count query also returns the magnitude range over every match, the tool marks the listed events as a sample, and the server computes `directionFromCenter`; the prompt requires these values. Tests added, including PostgreSQL. |

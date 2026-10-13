@@ -1,6 +1,8 @@
 # Waypoint AI
 
-Waypoint AI is a self-hosted geospatial assistant demo. A local LLM turns natural-language requests into validated, read-only backend searches: places from OpenStreetMap, multi-city itineraries with road routes, and public earthquake events by place, radius, and period. Every name, coordinate, and route on the map comes from the database or the routing service, not from the model.
+Waypoint AI is a self-hosted map assistant built around one rule: **the model cannot invent a fact**. A local LLM turns natural-language requests into validated, read-only backend searches, and every place name, coordinate, and route on the map comes from verified database rows or the routing service. When the model is unavailable, a rule-based parser takes over and the UI says so.
+
+It covers OpenStreetMap places, multi-city itineraries with road routes, and public earthquake data searched by place, radius, and period in a separate event explorer.
 
 ![Waypoint AI: the chat finds earthquakes within 60 km of Perugia and draws the search radius on the map](docs/media/waypoint-ai-route-chat.png)
 
@@ -20,8 +22,8 @@ The model runs through a locally managed Ollama service. It can request a small 
 - Deterministic itineraries for 1–7 days across up to five cities ("Rome and Florence for 5 days"): stops come from verified place rows, each day gets its own road route, and each city's visited area is outlined on the map.
 - Event search from the chat: "earthquakes within 60 km of Perugia this month" resolves the settlement on the server, runs a bounded radius query, and draws the circle on the map.
 - Explicit empty, clarification, model-unavailable, and route-unavailable states.
-- Optional live voice dictation (demo, disabled by default). See [Voice input](#voice-input-demo-opt-in).
-- An investigation workspace for public event data: imported INGV earthquakes linked to nearby OSM places, a bounded REST API with keyset pagination, event details in a modal, and natural-language queries in which the model only fills in validated search filters, with a rule-based fallback. See [Investigation workspace](#investigation-workspace-demo).
+- Optional live voice dictation through OpenAI (disabled by default; the only feature that sends data off the machine). See [Voice input](#voice-input-demo-opt-in).
+- An event explorer for public earthquake data: imported INGV events linked to nearby OSM places, a bounded REST API with keyset pagination, event details in a modal, and natural-language queries in which the model only fills in validated search filters, with a rule-based fallback. See [Event explorer](#event-explorer-demo).
 
 The included OpenStreetMap extracts cover selected regions in Germany, Poland, Romania, France, Italy, and Spain; coverage is not complete in every country. Event records are imported on demand from INGV; an optional synthetic event set for offline demos is clearly labelled.
 
@@ -65,7 +67,7 @@ npm run model:serve
 npm run model:pull
 ```
 
-Optionally import recent earthquake events for the investigation workspace (requires network access to INGV):
+Optionally import recent earthquake events for the event explorer (requires network access to INGV):
 
 ```bash
 npm run data:import:events -- --source ingv-fdsn --days 7
@@ -77,17 +79,17 @@ Then start the app:
 npm run dev
 ```
 
-The frontend runs at `http://127.0.0.1:5173` (pages: `/`, `/map`, `/investigation`, `/model`); the API health endpoint is `http://127.0.0.1:8000/api/v1/healthz`. Model weights, Ollama runtime files, map extracts, and local environment values are excluded from Git. Setup scripts do not run automatically when the app starts. See [model configuration](docs/local-model-setup.md) for environment settings.
+The frontend runs at `http://127.0.0.1:5173` (pages: `/`, `/map`, `/investigation` for the event explorer, `/model`); the API health endpoint is `http://127.0.0.1:8000/api/v1/healthz`. Model weights, Ollama runtime files, map extracts, and local environment values are excluded from Git. Setup scripts do not run automatically when the app starts. See [model configuration](docs/local-model-setup.md) for environment settings.
 
 ## Data and privacy boundaries
 
-The browser talks only to the backend. The backend is the only component that connects to Ollama and PostgreSQL. Model tool calls are validated, read-only, and bounded. Conversation retention and the single-workspace demo limitations are documented in the [backend guide](docs/backend.md).
+The browser talks only to the backend. The backend is the only component that connects to Ollama and PostgreSQL. Model tool calls are validated, read-only, and bounded. Apart from the opt-in voice input, chat text never leaves the machine; the routing provider receives coordinates only. Conversation retention and the single-workspace demo limitations are documented in the [backend guide](docs/backend.md).
 
 OpenStreetMap attribution and source metadata are shown in the app. The optional map tile and routing providers are separate external services; routing sends coordinates only. The demo does not provide user authentication or multi-workspace authorization and should not be used with sensitive data.
 
-## Investigation workspace (demo)
+## Event explorer (demo)
 
-The **Investigation** page (radar icon) searches imported events by period, magnitude, source, and radius; shows each event's provenance, licence, last sync, and nearby OpenStreetMap places; and accepts natural-language queries such as "events within 30 km of Norcia in the last 3 days".
+The **Event explorer** page (radar icon) searches imported events by period, magnitude, source, and radius; shows each event's provenance, licence, last sync, and nearby OpenStreetMap places; and accepts natural-language queries such as "events within 30 km of Norcia in the last 3 days".
 
 - **Data source.** [INGV](https://terremoti.ingv.it/en) earthquake catalogue (FDSN event service, CC BY 4.0), imported manually. Imports are idempotent, audited in `source_sync_runs`, and retried safely. For offline demos, `--source demo-seismic-synthetic` loads generated events labelled as synthetic.
 - **API.** `GET /api/v1/investigations/events`, `GET /events/{id}`, `GET /entities/{id}`, `POST /query`, and an import trigger that is disabled by default. See [`contracts/openapi.yaml`](contracts/openapi.yaml).
@@ -102,11 +104,16 @@ The **Investigation** page (radar icon) searches imported events by period, magn
 | `INVESTIGATION_IMPORT_ENABLED` | `false` | Enables `POST /investigations/import/{sourceId}`; there is no authentication |
 | `TRUST_PROXY` | `false` | Reverse-proxy hop count for per-client rate limits |
 
-Design and review: [extension plan](docs/extension-plan.md), [technical decisions](docs/technical-decisions.md), [code review](docs/code-review.md), [demo and review guide](docs/demo-and-review.md).
+Start with these two documents:
+
+- [Technical decisions](docs/technical-decisions.md): how INGV, USGS, and EMSC compare on licence, coverage, and response format, why INGV was chosen, and how its fields map to the schema.
+- [Demo and review guide](docs/demo-and-review.md): what to try, what each request should return, and where the safety boundaries are.
+
+Also: [extension plan](docs/extension-plan.md) and [known issues and fixes](docs/code-review.md).
 
 ## Voice input (demo, opt-in)
 
-Set `VOICE_INPUT_ENABLED=true` and `OPENAI_API_KEY` in `.env` to show a microphone button in the chat composer. The backend relays audio to OpenAI Realtime transcription, and recognized text appears in the composer as you speak. **Audio leaves the local machine while you record**, and the UI shows a notice during recording. The API key stays on the backend. See the [voice protocol](contracts/websocket.md#voice-input-demo-opt-in) and the [stack decision](docs/stack-decision.md#voice-input-decision).
+Voice input is the only feature that sends data to an external AI service, and it is **off by default**; model inference and chat text stay local, and the routing provider receives coordinates only. Set `VOICE_INPUT_ENABLED=true` and `OPENAI_API_KEY` in `.env` to show a microphone button in the chat composer. The backend relays audio to OpenAI Realtime transcription, and recognized text appears in the composer as you speak. **Audio leaves the local machine while you record**, and the UI shows a notice during recording. The API key stays on the backend, and spending is capped: a process-wide limit on open sessions plus an hourly budget of sessions and recording seconds per client (`VOICE_MAX_CONCURRENT_SESSIONS`, `VOICE_SESSIONS_PER_CLIENT_PER_HOUR`, `VOICE_SECONDS_PER_CLIENT_PER_HOUR`). See the [voice protocol](contracts/websocket.md#voice-input-demo-opt-in) and the [stack decision](docs/stack-decision.md#voice-input-decision).
 
 ## Development checks
 

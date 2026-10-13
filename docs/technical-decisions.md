@@ -1,6 +1,6 @@
 # Technical decisions: Investigation Workspace
 
-Status: **implemented** (demo; decided in Phase 2). Builds on the audit in [extension-plan.md](extension-plan.md). Source behavior below was checked with live requests on 2026-10-13; terms were read from the providers' own pages on the same date.
+Status: **implemented** (demo). Builds on the audit in [extension-plan.md](extension-plan.md). Source behavior below was checked with live requests on 2026-10-13; terms were read from the providers' own pages on the same date.
 
 ## 1. External data source
 
@@ -33,7 +33,7 @@ Measured with a Central Italy box (lat 41–44.5, lon 10–15), which matches th
 - **No account, documented standard API, GeoJSON output, radius and magnitude filters on the server.**
 - **No personal data.** Events describe natural phenomena, not people.
 
-**Second adapter (optional, Phase 3 stretch): USGS.** Public domain and global. Adding it after INGV proves that a new source is one adapter, not a redesign. It is not the demo source because European coverage below magnitude 2.5 is sparse.
+**Second adapter (optional): USGS.** Public domain and global. Adding it after INGV proves that a new source is one adapter, not a redesign. It is not the demo source because European coverage below magnitude 2.5 is sparse.
 
 **Rejected: EMSC.** Good coverage, but the commercial-use clause makes it a poor default for client work.
 

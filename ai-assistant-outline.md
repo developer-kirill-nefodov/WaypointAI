@@ -14,4 +14,4 @@ Waypoint AI is a self-hosted geospatial assistant demo. The model interprets a r
 - [Demo rehearsal](docs/demo-rehearsal.md)
 - [OpenStreetMap data plan](docs/data-acquisition-plan.md)
 
-Reference media is used only for general domain context. Demo data must remain synthetic, and geographic place data must retain source, license, and snapshot attribution. External integrations belong behind explicit backend allowlists.
+Demo data must remain synthetic, and geographic place data must retain source, license, and snapshot attribution. External integrations belong behind explicit backend allowlists.

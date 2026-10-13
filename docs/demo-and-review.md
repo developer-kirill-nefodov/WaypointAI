@@ -1,6 +1,6 @@
 # Investigation Workspace: demo and technical review guide
 
-Status: **demo**. This document describes what is implemented in the repository. Future work is marked as such. Related documents: [extension plan](extension-plan.md), [technical decisions](technical-decisions.md), [code review](code-review.md), [backend guide](backend.md), [frontend guide](frontend.md).
+Status: **demo**. This document describes what is implemented in the repository. Future work is marked as such. Related documents: [extension plan](extension-plan.md), [technical decisions](technical-decisions.md), [known issues and fixes](code-review.md), [backend guide](backend.md), [frontend guide](frontend.md).
 
 ## 1. Demo script (2–3 minutes)
 

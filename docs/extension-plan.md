@@ -1,6 +1,6 @@
 # Extension plan: Investigation Workspace
 
-Status: **implemented** (demo). This was the Phase 1 audit and plan; the outcome is described in [technical decisions](technical-decisions.md), [code review](code-review.md), and the [demo and review guide](demo-and-review.md). Deviations from this plan are noted in those documents.
+Status: **implemented** (demo). This was the initial audit and plan; the outcome is described in [technical decisions](technical-decisions.md), [known issues and fixes](code-review.md), and the [demo and review guide](demo-and-review.md). Deviations from this plan are noted in those documents.
 
 The goal is to extend WaypointAI into a small investigation workspace for open-source data. It should be one working vertical slice: a public external source is imported into PostgreSQL, exposed through a validated REST API, queried in natural language through allowlisted tools, and shown in the existing React map UI with provenance.
 
@@ -115,7 +115,7 @@ All claims below come from source code and the local database, not from the READ
 
 ### External source
 
-Selected in Phase 2: **INGV FDSN event service** (Italy, CC BY 4.0), with **USGS** as an optional second adapter. EMSC was rejected because commercial use needs written permission. See [technical-decisions.md](technical-decisions.md) for the comparison, measured coverage, and verified response format.
+Selected source: **INGV FDSN event service** (Italy, CC BY 4.0), with **USGS** as an optional second adapter. EMSC was rejected because commercial use needs written permission. See [technical-decisions.md](technical-decisions.md) for the comparison, measured coverage, and verified response format.
 
 Why seismic events fit:
 
@@ -187,7 +187,7 @@ record_place_links      record_id FK → records ON DELETE CASCADE,
 Design notes:
 
 - `records.id` becomes a deterministic `"<sourceId>:<externalId>"`, so re-imports are upserts, not duplicates.
-- Magnitude and depth stay in `attributes` JSONB at first. If magnitude filtering becomes a hot path, promote it to a typed column or add an expression index; decide in Phase 2 after measuring.
+- Magnitude and depth stay in `attributes` JSONB at first. If magnitude filtering becomes a hot path, promote it to a typed column or add an expression index; decide after measuring.
 - `source_revision` lets an import skip unchanged rows and record revisions (for example, a revised magnitude). INGV has no update timestamp, so the revision is `originId:version`.
 - `error_code` stores a short code, never raw upstream bodies or credentials.
 - No PostGIS: radius queries use the existing bbox prefilter plus haversine pattern. Reconsider at larger volumes.
