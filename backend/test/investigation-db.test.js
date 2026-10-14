@@ -38,6 +38,8 @@ before(async () => {
     repo: await import("../src/data/investigation.repository.ts"),
     settlements: await import("../src/data/settlement.repository.ts"),
     database: (await import("../src/database/client.ts")).database,
+    conversations: await import("../src/data/conversation.repository.ts"),
+    places: await import("../src/data/record.repository.ts"),
   };
   await resetData();
 });
@@ -248,4 +250,25 @@ test("resolves settlements by exact local or English name, preferring larger pla
   assert.equal((await modules.settlements.resolveSettlement("testopoli")).match, "exact");
   assert.equal(await modules.settlements.resolveSettlement("Xestopoli"), null, "the first three letters must match");
   assert.equal(await modules.settlements.resolveSettlement("Testopoli' OR '1'='1"), null);
+});
+
+test("keeps the trip plan of a conversation across turns until it is replaced or cleared", { skip }, async () => {
+  const { conversations, places } = modules;
+  const id = "8b0e7c1e-5f0a-4a51-9a51-0c6a39a5e001";
+  const plan = {
+    status: "ready", countryCode: "IT", city: "Testopoli", totalDays: 1, supportedDays: 1, travelMode: "driving", airport: null, sourceIds: [PLACE_SOURCE_ID],
+    days: [{ day: 1, area: "city", stopPlaceIds: ["p-near-1", "p-near-2"], straightLineDistanceMetersFromAirport: {}, routeStatus: "pending" }],
+  };
+  await sql("DELETE FROM assistant_conversations WHERE workspace_id = 'test-workspace'");
+  await conversations.saveConversationTurn(id, "test-workspace", [{ role: "user", content: "Plan one day" }, { role: "assistant", content: "Plan" }], plan);
+  assert.deepEqual(await conversations.getConversationTripPlan(id, "test-workspace"), plan);
+  assert.equal(await conversations.getConversationTripPlan(id, "other-workspace"), null);
+
+  await conversations.saveConversationTurn(id, "test-workspace", [{ role: "user", content: "How many stops?" }, { role: "assistant", content: "Two" }]);
+  assert.deepEqual(await conversations.getConversationTripPlan(id, "test-workspace"), plan, "a turn without a plan keeps the stored one");
+  assert.deepEqual((await places.getPlacesByIds(["p-far", "missing", "p-near-1"])).map((place) => place.id), ["p-far", "p-near-1"]);
+
+  await conversations.saveConversationTurn(id, "test-workspace", [{ role: "user", content: "New plan" }, { role: "assistant", content: "Which country?" }], null);
+  assert.equal(await conversations.getConversationTripPlan(id, "test-workspace"), null);
+  await sql("DELETE FROM assistant_conversations WHERE workspace_id = 'test-workspace'");
 });

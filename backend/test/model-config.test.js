@@ -16,7 +16,7 @@ test("rejects non-loopback Ollama endpoints", () => {
 
 test("validates configurable generation settings and defaults", () => {
   const parsed = modelEnvironmentSchema.parse({});
-  assert.equal(parsed.OLLAMA_NUM_CONTEXT, 4096);
+  assert.equal(parsed.OLLAMA_NUM_CONTEXT, 8192);
   assert.equal(parsed.OLLAMA_NUM_PREDICT, 768);
   assert.equal(modelEnvironmentSchema.safeParse({ OLLAMA_NUM_PREDICT: "10000" }).success, false);
 });

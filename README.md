@@ -17,9 +17,9 @@ The model runs through a locally managed Ollama service. It can request a small 
 ## What the demo shows
 
 - English, Russian, and German assistant interactions over WebSocket, with streamed tool progress and automatic reconnection.
-- Local inference through Ollama with five allowlisted, read-only tools: `search_places`, `search_records`, `get_record_details`, `list_sources`, and `search_events`. The server validates every tool call with Zod.
+- Local inference through Ollama. The model interprets every message in any language and answers only through allowlisted tools: five read-only searches (`search_places`, `search_records`, `get_record_details`, `list_sources`, `search_events`), `plan_trip` and `edit_trip_plan` for the trip plan of the current conversation, and `reply` for answers that need no data. The server validates every tool call with Zod; there are no keyword rules for intent.
 - Search over imported OpenStreetMap places and clear source coverage metadata.
-- Deterministic itineraries for 1–7 days across up to five cities ("Rome and Florence for 5 days"): stops come from verified place rows, each day gets its own road route, and each city's visited area is outlined on the map.
+- Deterministic itineraries for 1–7 days across up to five cities ("Rome and Florence for 5 days"): stops come from verified place rows, each day gets its own road route, and each city's visited area is outlined on the map. The plan stays editable in the chat, in any language: "add a museum to day 2", "remove the first stop of day 1", "move Melt Museum to day 2", "one more day with parks", "places only, no route". The server keeps the plan per conversation and picks every new stop from the database; the model only names the change.
 - Event search from the chat: "earthquakes within 60 km of Perugia this month" resolves the settlement on the server, runs a bounded radius query, and draws the circle on the map.
 - Explicit empty, clarification, model-unavailable, and route-unavailable states.
 - Optional live voice dictation through OpenAI (disabled by default; the only feature that sends data off the machine). See [Voice input](#voice-input-demo-opt-in).

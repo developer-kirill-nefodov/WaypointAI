@@ -1,6 +1,7 @@
 import { z } from "zod";
 import type { PlaceView, RecordView, Scope, ToolName } from "@waypoint-ai/shared";
-import { getRecordDetails, getSources, searchPlaces, searchRecords } from "../data/record.repository.js";
+import { getRecordDetails, getSources, searchNearbyPlaces, searchPlaces, searchRecords } from "../data/record.repository.js";
+import { resolveSettlement } from "../data/settlement.repository.js";
 import type { ToolDefinition } from "../llm/ollama.provider.js";
 import { searchEventsToolDefinition } from "./search-events.js";
 import { executeSearchEventsTool, type SearchEventsToolContext } from "./search-events-tool.js";
@@ -49,11 +50,11 @@ export const assistantToolDefinitions: ToolDefinition[] = [
     type: "function",
     function: {
       name: "search_places",
-      description: "Search actual named places and POIs in local OpenStreetMap regional snapshots: Berlin (DE), Mazovian Voivodeship (PL), all Romania (RO), Île-de-France (FR), Central Italy (IT), Madrid (ES). Place names are real OSM data, not synthetic; the snapshot may be incomplete or outdated. These are not full-country coverage except Romania. For broad category searches (for example restaurants or cities), pass category and countryCode only. Use city only when the user names one specific city; do not put a country or city name in query when using those fields. query is for a place name, street, or postcode fragment. Not live web search.",
+      description: "Search named places and POIs in the local OpenStreetMap snapshots. Put a named city in city (local spelling); query is only for a place name, street, or postcode fragment.",
       parameters: { type: "object", additionalProperties: false, properties: {
-        query: { type: "string", maxLength: 100, description: "Name, street, city, or postcode fragment to search." },
+        query: { type: "string", maxLength: 100 },
         category: { type: "string", maxLength: 120, description: "Partial OSM category tag, e.g. restaurant, amenity:cafe, place:city, or shop:supermarket." },
-        countryCode: { type: "string", enum: ["DE", "PL", "RO", "FR", "IT", "ES"], description: "ISO 3166-1 alpha-2 code for a named country." },
+        countryCode: { type: "string", enum: ["DE", "PL", "RO", "FR", "IT", "ES"] },
         city: { type: "string", maxLength: 120 },
         limit: { type: "integer", minimum: 1, maximum: 50 },
       } },
@@ -139,10 +140,15 @@ export async function executeAssistantTool(
   if (name === "search_places") {
     const parsed = searchPlacesArgs.safeParse(rawArgs);
     if (!parsed.success) return { content: { error: "Invalid place search parameters." }, resultsFound: 0 };
-    const result = await searchPlaces({ ...parsed.data, limit: Math.min(parsed.data.limit ?? 10, 10), sourceIds });
+    // A city with neither category nor query would return whatever rows are nearest, mostly bare addresses.
+    if (parsed.data.city && !parsed.data.category && !parsed.data.query) {
+      return { content: { error: "Add a category for the kind of places, for example tourism:attraction, tourism:museum, or amenity:restaurant, and call search_places again." }, resultsFound: 0 };
+    }
+    const limit = Math.min(parsed.data.limit ?? 10, 10);
+    const result = await searchPlacesInCity({ ...parsed.data, limit, sourceIds });
     const places = result.places as PlaceView[];
     return {
-      content: { total: result.total, places: places.map((place) => ({ id: place.id, name: place.name, category: place.category, countryCode: place.countryCode, city: place.city, postcode: place.postcode, street: place.street, houseNumber: place.houseNumber, details: place.details, lat: place.lat, lon: place.lon })) },
+      content: { total: result.total, ...(places.length ? {} : { hint: "No matches. Place and city names in the snapshot use their local spelling (Warszawa, Roma, București). If the request named a city, retry once with that city in the city field and no query." }), places: places.map((place) => ({ id: place.id, name: place.name, category: place.category, countryCode: place.countryCode, city: place.city, postcode: place.postcode, street: place.street, houseNumber: place.houseNumber, details: place.details, lat: place.lat, lon: place.lon })) },
       places,
       totalPlaces: result.total,
       resultsFound: places.length,
@@ -194,4 +200,27 @@ function compactAttributes(attributes: Record<string, unknown>) {
     if (JSON.stringify(compact).length >= 250) break;
   }
   return compact;
+}
+
+const CITY_RADIUS_METERS: Record<string, number> = { "place:city": 8_000, "place:town": 4_000 };
+
+/**
+ * Most OSM rows carry no address city, so a city filter alone misses most places in it. A named city is resolved to
+ * its verified settlement (local or English name) and searched by radius; the address field is the fallback.
+ */
+async function searchPlacesInCity(input: z.infer<typeof searchPlacesArgs> & { limit: number; sourceIds?: string[] }) {
+  if (input.city) {
+    const settlement = await resolveSettlement(input.city);
+    if (settlement) {
+      const { city: _city, countryCode: _countryCode, ...filters } = input;
+      const nearby = await searchNearbyPlaces({
+        ...filters,
+        center: { lat: settlement.lat, lon: settlement.lon },
+        radiusMeters: CITY_RADIUS_METERS[settlement.category] ?? 2_500,
+      });
+      const named = nearby.places.filter((place) => /\p{L}/u.test(place.name));
+      if (named.length) return { total: nearby.total, places: named };
+    }
+  }
+  return searchPlaces(input);
 }

@@ -136,14 +136,6 @@ export default function AssistantWorkspace() {
             setPending(false);
             setActiveRequestId(null);
             setProgressLabel(null);
-            if (frame.choices.some((choice) => choice.id.startsWith("new-"))) {
-              setMapPlaces([]);
-              setMapRecords([]);
-              setTripPlan(null);
-              setSearchArea(null);
-              setSelectedResultKey(null);
-              setResetViewportRevision((revision) => revision + 1);
-            }
             setMessages((current) => [...current, { role: "assistant", text: frame.message, choices: frame.choices, durationMs }]);
           }
           if (frame.type === "turn.completed") {

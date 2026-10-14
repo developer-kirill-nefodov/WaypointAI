@@ -94,6 +94,15 @@ export async function getPlaceDetails(id: string) {
   return row ? toPlaceView(row) : null;
 }
 
+/** Places by ID, in the order of `ids`; IDs that no longer exist are skipped. */
+export async function getPlacesByIds(ids: string[]) {
+  if (!ids.length) return [];
+  await database.authenticate();
+  const rows = await Place.findAll({ where: { id: { [Op.in]: ids.slice(0, 200) } }, attributes: PLACE_VIEW_ATTRIBUTES });
+  const byId = new Map(rows.map((row) => { const place = toPlaceView(row); return [place.id, place]; }));
+  return ids.flatMap((id) => byId.get(id) ?? []);
+}
+
 export interface SearchPlacesInput {
   query?: string;
   category?: string;

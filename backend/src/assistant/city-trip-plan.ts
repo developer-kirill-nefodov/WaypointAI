@@ -1,7 +1,9 @@
 import type { PlaceView, TripPlan } from "@waypoint-ai/shared";
 import { searchNearbyPlaces } from "../data/record.repository.js";
-import { CAPITAL_TRIP_CITIES } from "./travel-place-prefetch.js";
-import type { TripCity } from "./trip-cities.js";
+import type { ResolvedPlace } from "../data/settlement.repository.js";
+
+/** A city of a trip, resolved to a verified OSM settlement. */
+export type TripCity = Omit<ResolvedPlace, "match">;
 
 const STOPS_PER_DAY = 4;
 const MAX_STOPS_PER_DAY = 8;
@@ -16,11 +18,6 @@ export interface CityStops {
   days: number;
   places: PlaceView[];
   partial: boolean;
-}
-
-/** City trips cover several cities, or one city that the single-city flow does not know (for example Firenze). */
-export function isCityTrip(cities: TripCity[]): boolean {
-  return cities.length > 1 || (cities.length === 1 && !CAPITAL_TRIP_CITIES.has(cities[0]!.name));
 }
 
 /** Sightseeing places around each city's verified center, about four per planned day. */

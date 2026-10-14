@@ -11,17 +11,15 @@ flowchart LR
     UI -->|WebSocket: message, filters, language, selected item| API
     API --> ORCH[Assistant orchestration]
     ORCH --> VALIDATE[Validate protocol, scope, and limits]
-    VALIDATE --> ROUTER{Request type}
-    ROUTER -->|Travel lookup| PREFETCH[Verified place prefetch]
-    ROUTER -->|Open-ended question| MODEL[Local Ollama model]
+    VALIDATE --> ROUTER{Plan on the map?}
+    ROUTER -->|Every message| MODEL[Local Ollama model]
     MODEL -->|Generated answer| ORCH
-    PREFETCH --> REPO
     MODEL -->|Function name and validated arguments| TOOLS
     TOOLS --> REPO[Sequelize repositories]
     REPO --> DB[(PostgreSQL)]
     DB --> TOOLS
     TOOLS -->|Bounded results and source metadata| ORCH
-    PREFETCH -->|Verified places and typed itinerary| ORCH
+    TOOLS -->|plan_trip / edit_trip_plan: typed itinerary from verified places| ORCH
     ORCH -->|Text, map features, itinerary, provenance| UI
     UI --> MAP[Map and selected place details]
 

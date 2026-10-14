@@ -296,6 +296,8 @@ export default function MapPanel({
   const [routeState, setRouteState] = useState<RouteState>({ status: "idle", plan: null, orderedPoints: [] });
   const [routeExpanded, setRouteExpanded] = useState(false);
   const [routeRetryKey, setRouteRetryKey] = useState(0);
+  // A road route through plain search results is built only on request; trip plans route their days themselves.
+  const [routeRequested, setRouteRequested] = useState(false);
   const [dayRouteRetryKeys, setDayRouteRetryKeys] = useState<Record<number, number>>({});
   const [dayRouteStates, setDayRouteStates] = useState<Record<number, RouteState>>({});
   const [focusedDay, setFocusedDay] = useState<number | "city" | null>(null);
@@ -337,6 +339,8 @@ export default function MapPanel({
     };
   }, [highlights]);
   const routePoints = routeCandidates.points;
+  const routeSignature = routePoints.map((point) => point.id).join(",");
+  useEffect(() => { setRouteRequested(false); }, [routeSignature]);
   const tripPlacesById = useMemo(() => new Map(highlights.map((place) => [place.id, place])), [highlights]);
   const tripRouteInputs = useMemo(() => tripPlan?.days.map((day) => {
     const places = day.stopPlaceIds.flatMap((id) => {
@@ -408,7 +412,7 @@ export default function MapPanel({
           {visitedAreas.length > 0 && <VisitedAreas areas={visitedAreas} language={language} />}
           {tileUrl && <TileLayer url={tileUrl} attribution='&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap contributors</a>' />}
           {countryBoundaries.map(({ code, feature }) => <LeafletGeoJSON key={code} data={feature} style={{ color: COUNTRY_BORDER_COLOR, weight: 1.5, opacity: 0.9, fillColor: COUNTRY_BORDER_COLOR, fillOpacity: 0.02, dashArray: "4 6" }} interactive={false} />)}
-          {tripPlan ? tripRouteInputs.map((route) => route.routeStatus === "pending" && <TripRouteLayer key={`${tripPlan.totalDays}:${route.day}:${route.points.map((point) => point.id).join(",")}`} day={route.day} points={route.points} retryKey={dayRouteRetryKeys[route.day] ?? 0} onState={handleDayRouteState} />) : !investigation && <RouteLayer points={routePoints} retryKey={routeRetryKey} onState={handleRouteState} />}
+          {tripPlan ? tripRouteInputs.map((route) => route.routeStatus === "pending" && <TripRouteLayer key={`${tripPlan.totalDays}:${route.day}:${route.points.map((point) => point.id).join(",")}`} day={route.day} points={route.points} retryKey={dayRouteRetryKeys[route.day] ?? 0} onState={handleDayRouteState} />) : !investigation && <RouteLayer points={routeRequested ? routePoints : []} retryKey={routeRetryKey} onState={handleRouteState} />}
           {tripPlan ? tripRouteInputs.map((route) => <RouteGeometry key={`geometry-${route.day}`} plan={focusedDay !== null && (focusedDay !== "city" ? focusedDay !== route.day : route.area !== "city") ? null : dayRouteStates[route.day]?.plan ?? null} points={focusedDay !== null && (focusedDay !== "city" ? focusedDay !== route.day : route.area !== "city") ? [] : dayRouteStates[route.day]?.orderedPoints ?? []} color={routeColors[(route.day - 1) % routeColors.length]} />) : !investigation && <RouteGeometry plan={routeState.plan} points={routeState.orderedPoints} />}
           {mapItems.map((item) => {
             const selected = item.key === selectedResultKey;
@@ -420,7 +424,14 @@ export default function MapPanel({
           })}
         </MapContainer>
         {countryBoundaries.length > 0 && <div className="boundary-legend"><span aria-hidden="true" />{t("Страны:", "Countries:")} {countryBoundaries.map(({ code }) => countryName(code, language)).join(" · ")}{tripPlan && <><span className="city-focus-dot" aria-hidden="true" />{(tripPlan.cities?.length ?? 0) > 1 ? t("Города:", "Cities:") : t("Точки города:", "City points:")} {tripPlan.city}{focusedDay === "city" ? ` · ${focusPoints.length}` : focusedDay !== null ? ` · ${t("день", "day")} ${focusedDay}` : ""}</>}</div>}
-        {!tripPlan && !investigation && routeState.status !== "idle" && <RouteSummary language={language} state={routeState} totalPoints={routeCandidates.total} expanded={routeExpanded} onToggle={() => setRouteExpanded((value) => !value)} onRetry={() => setRouteRetryKey((value) => value + 1)} />}
+        {!tripPlan && !investigation && !routeRequested && routePoints.length >= 2 && <section className="route-summary route-summary-idle">
+          <div className="route-summary-heading">
+            <span className="route-summary-icon"><Route size={16} /></span>
+            <div className="route-summary-title"><strong>{t("Маршрут не построен", "No route yet")}</strong><small>{t("Автомобильный маршрут по найденным местам строится по запросу.", "A driving route through the found places is built on request.")}</small></div>
+            <button type="button" className="route-build" onClick={() => setRouteRequested(true)}>{t("Построить маршрут", "Build route")}</button>
+          </div>
+        </section>}
+        {!tripPlan && !investigation && routeRequested && routeState.status !== "idle" && <RouteSummary language={language} state={routeState} totalPoints={routeCandidates.total} expanded={routeExpanded} onToggle={() => setRouteExpanded((value) => !value)} onRetry={() => setRouteRetryKey((value) => value + 1)} />}
       </div>
       {tripPlan && <TripPlanBoard language={language} plan={tripPlan} highlights={highlights} routeStates={dayRouteStates} sourceLabels={sourceLabels} sourceDates={sourceDates} focusedDay={focusedDay} selectedPlaceId={selectedItem?.kind === "place" ? selectedItem.id : null} onSelectDay={(day) => { setFocusedDay(day); setFocusRevision((revision) => revision + 1); const failed = day !== "city" && dayRouteStates[day]?.status === "error"; if (failed) setDayRouteRetryKeys((current) => ({ ...current, [day]: (current[day] ?? 0) + 1 })); }} onSelectPlace={(id) => onSelectResult(`place:${id}`)} />}
       {!tripPlan && !investigation && <section className="server-results" aria-label={t("Результаты запроса", "Query results")}>

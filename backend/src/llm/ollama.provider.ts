@@ -24,7 +24,8 @@ export interface OllamaCallMetrics {
 export interface ChatResult { message: ChatMessage; metrics: OllamaCallMetrics }
 export class OllamaUnavailableError extends Error {}
 
-export async function chat(messages: ChatMessage[], tools: ToolDefinition[], signal: AbortSignal): Promise<ChatResult> {
+/** `format` constrains the reply to a JSON schema (Ollama structured outputs); used for small classification calls. */
+export async function chat(messages: ChatMessage[], tools: ToolDefinition[], signal: AbortSignal, format?: Record<string, unknown>): Promise<ChatResult> {
   let response: Response;
   try { response = await fetch(new URL("/api/chat", env.OLLAMA_BASE_URL), {
     method: "POST",
@@ -33,6 +34,7 @@ export async function chat(messages: ChatMessage[], tools: ToolDefinition[], sig
       model: env.OLLAMA_MODEL,
       messages,
       tools,
+      ...(format ? { format } : {}),
       stream: false,
       think: false,
       keep_alive: env.OLLAMA_KEEP_ALIVE,

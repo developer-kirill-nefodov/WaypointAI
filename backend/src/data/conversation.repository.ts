@@ -1,4 +1,5 @@
 import { Op } from "sequelize";
+import type { TripPlan } from "@waypoint-ai/shared";
 import type { ChatMessage } from "../llm/ollama.provider.js";
 import { database } from "../database/client.js";
 import { Conversation, type ConversationMessage } from "../models/conversation.js";
@@ -19,7 +20,20 @@ export async function getConversationMessages(id: string, workspaceId: string): 
   return (conversation?.messages ?? []).map(({ role, content }) => ({ role, content }));
 }
 
-export async function saveConversationTurn(id: string, workspaceId: string, messages: ChatMessage[]): Promise<void> {
+/** The trip plan the conversation currently shows, or null when it has none. */
+export async function getConversationTripPlan(id: string, workspaceId: string): Promise<TripPlan | null> {
+  await database.authenticate();
+  const conversation = await Conversation.findOne({
+    where: { id, workspaceId, expiresAt: { [Op.gt]: new Date() } },
+    attributes: ["tripPlan"],
+  });
+  return conversation?.tripPlan ?? null;
+}
+
+/**
+ * Saves the turn. `tripPlan` replaces the stored plan when given (null clears it); when omitted the stored plan is kept.
+ */
+export async function saveConversationTurn(id: string, workspaceId: string, messages: ChatMessage[], tripPlan?: TripPlan | null): Promise<void> {
   await database.authenticate();
   const now = new Date();
   const filteredMessages: ConversationMessage[] = messages.flatMap((message) =>
@@ -40,10 +54,11 @@ export async function saveConversationTurn(id: string, workspaceId: string, mess
         const oldest = await Conversation.findOne({ where: { workspaceId }, order: [["updatedAt", "ASC"]], transaction });
         await oldest?.destroy({ transaction });
       }
-      await Conversation.create({ id, workspaceId, messages: safeMessages, expiresAt: new Date(now.getTime() + CONVERSATION_TTL_MS) }, { transaction });
+      await Conversation.create({ id, workspaceId, messages: safeMessages, tripPlan: tripPlan ?? null, expiresAt: new Date(now.getTime() + CONVERSATION_TTL_MS) }, { transaction });
       return;
     }
     current.messages = safeMessages;
+    if (tripPlan !== undefined) current.tripPlan = tripPlan;
     current.expiresAt = new Date(now.getTime() + CONVERSATION_TTL_MS);
     await current.save({ transaction });
   });

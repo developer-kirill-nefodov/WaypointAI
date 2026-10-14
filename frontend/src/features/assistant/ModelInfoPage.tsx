@@ -17,6 +17,8 @@ export default function ModelInfoPage({ language, modelLabel, ready }: ModelInfo
     { icon: MapPinned, name: "search_places", description: t("Ищет реальные места из снимков OpenStreetMap по названию, категории, стране или городу.", "Finds real places in OpenStreetMap snapshots by name, category, country, or city.") },
     { icon: Globe2, name: "list_sources", description: t("Возвращает доступные источники, их охват, даты и сведения об атрибуции.", "Lists available sources, their coverage, snapshot dates, and attribution.") },
     { icon: Radar, name: "search_events", description: t("Ищет землетрясения по городу или выбранной точке, радиусу, периоду и магнитуде; центр находит сервер, на карте рисуется круг.", "Finds earthquakes by settlement or selected point, radius, period, and magnitude; the server resolves the center and the map draws the circle.") },
+    { icon: Route, name: "plan_trip", description: t("Составляет план поездки по городам и дням. Модель называет города и число дней, сервер находит их в базе и подбирает точки.", "Creates a trip plan by city and day. The model names the cities and days; the server resolves them and picks every stop.") },
+    { icon: Route, name: "edit_trip_plan", description: t("Меняет текущий план поездки: добавляет, убирает и переносит точки и дни. Новые точки выбирает сервер из локальной базы.", "Edits the current trip plan: adds, removes, and moves stops and days. The server picks every new stop from the local database.") },
   ];
   const suggestions = language === "ru" ? [
     "Найди музеи в Берлине и покажи их на карте.",

@@ -5,7 +5,7 @@
  */
 import type { SyncSummary } from "./investigation.js";
 export type AssistantStatus = "ready" | "model_unavailable" | "data_unavailable" | "starting";
-export type ToolName = "search_records" | "get_record_details" | "search_places" | "list_sources" | "search_events";
+export type ToolName = "search_records" | "get_record_details" | "search_places" | "list_sources" | "search_events" | "plan_trip" | "edit_trip_plan";
 export type Language = "en" | "ru" | "de";
 export type VoiceErrorCode = "voice_disabled" | "invalid_message" | "busy" | "rate_limited" | "provider_unavailable" | "timeout" | "internal_error";
 

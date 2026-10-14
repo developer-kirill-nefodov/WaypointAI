@@ -22,7 +22,7 @@ The install and model download require network access. Inference is local after 
 |---|---|---|
 | `OLLAMA_BASE_URL` | `http://127.0.0.1:11434` | Must use `localhost`, `127.0.0.1`, or `::1` loopback |
 | `OLLAMA_MODEL` | `qwen3:4b-instruct-2507-q4_K_M` | Non-empty local model tag |
-| `OLLAMA_NUM_CONTEXT` | `4096` | 512–32768 tokens |
+| `OLLAMA_NUM_CONTEXT` | `8192` | 512–32768 tokens; the prompt, tools, trip plan, and history need about 4–7k |
 | `OLLAMA_NUM_PREDICT` | `768` | 128–2048 generated tokens |
 | `OLLAMA_NUM_BATCH` | `256` | 1–2048 |
 | `OLLAMA_TEMPERATURE` | `0.2` | 0–2 |

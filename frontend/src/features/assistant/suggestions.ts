@@ -71,34 +71,40 @@ export function contextSuggestions(context: SuggestionContext, language: Languag
   return [...new Map(suggestions.map((suggestion) => [suggestion.prompt, suggestion])).values()].slice(0, 6);
 }
 
+/** Follow-ups that edit the plan on the map; the server applies them to the stored plan. */
 function tripSuggestions(plan: TripPlan, language: Language): SuggestedReply[] {
   const cities = plan.cities?.length ? plan.cities.map((city) => city.name) : [plan.city];
-  const list = joinNames(cities, language);
-  const longer = Math.min(7, plan.totalDays + 1);
-  const shorter = Math.max(cities.length, plan.totalDays - 1);
+  const lastDay = plan.totalDays;
   const suggestions: SuggestedReply[] = [];
-  if (longer > plan.totalDays) {
+  if (plan.totalDays < 7) {
     suggestions.push(reply(language,
-      [`На ${longer} ${dayWordRu(longer)}`, `Make it ${longer} ${days(longer)}`, `Auf ${longer} ${tage(longer)}`],
-      [`${list} на ${longer} ${dayWordRu(longer)} на машине`, `Plan ${longer} ${days(longer)} in ${list} by car`, `Plane ${longer} ${tage(longer)} in ${list} mit dem Auto`]));
+      ["Ещё один день", "One more day", "Noch ein Tag"],
+      ["Добавь ещё один день", "Add another day", "Füge noch einen Tag hinzu"]));
   }
-  if (shorter < plan.totalDays) {
+  suggestions.push(reply(language,
+    ["Музей в день 1", "Museum on day 1", "Museum an Tag 1"],
+    ["Добавь музей в день 1", "Add a museum to day 1", "Füge ein Museum zu Tag 1 hinzu"]));
+  suggestions.push(reply(language,
+    [`Парки в день ${lastDay}`, `Parks on day ${lastDay}`, `Parks an Tag ${lastDay}`],
+    [`Замени день ${lastDay} на парки`, `Replace day ${lastDay} with parks`, `Ersetze Tag ${lastDay} durch Parks`]));
+  if (plan.totalDays > 1) {
     suggestions.push(reply(language,
-      [`Сократить до ${shorter} ${dayWordGenitiveRu(shorter)}`, `Shorten to ${shorter} ${days(shorter)}`, `Auf ${shorter} ${tage(shorter)} kürzen`],
-      [`${list} на ${shorter} ${dayWordRu(shorter)} на машине`, `Plan ${shorter} ${days(shorter)} in ${list} by car`, `Plane ${shorter} ${tage(shorter)} in ${list} mit dem Auto`]));
+      [`Убрать день ${lastDay}`, `Remove day ${lastDay}`, `Tag ${lastDay} entfernen`],
+      [`Убери день ${lastDay}`, `Remove day ${lastDay}`, `Entferne Tag ${lastDay}`]));
   }
+  suggestions.push(plan.travelMode === "driving"
+    ? reply(language,
+      ["Только места, без маршрута", "Places only, no route", "Nur Orte, ohne Route"],
+      ["Покажи только список мест, без маршрута", "Show places only, without a route", "Nur Orte, ohne Route"])
+    : reply(language,
+      ["Построить маршрут", "Build the route", "Route berechnen"],
+      ["Построй автомобильный маршрут", "Use a driving route", "Mit dem Auto fahren"]));
   if (cities.length > 1) {
     const only = Math.min(3, plan.totalDays);
     suggestions.push(reply(language,
       [`Только ${cities[0]}`, `Only ${cities[0]}`, `Nur ${cities[0]}`],
       [`${cities[0]} на ${only} ${dayWordRu(only)} на машине`, `Plan ${only} ${days(only)} in ${cities[0]} by car`, `Plane ${only} ${tage(only)} in ${cities[0]} mit dem Auto`]));
   }
-  suggestions.push(reply(language,
-    ["Только места, без маршрута", "Places only, no route", "Nur Orte, ohne Route"],
-    [`${list} на ${plan.totalDays} ${dayWordRu(plan.totalDays)}, только список мест без маршрута`, `${list} for ${plan.totalDays} ${days(plan.totalDays)}, places without a route`, `${list} für ${plan.totalDays} ${tage(plan.totalDays)}, ohne Route`]));
-  suggestions.push(reply(language,
-    [`Музеи: ${cities[0]}`, `Museums in ${cities[0]}`, `Museen in ${cities[0]}`],
-    [`Найди музеи в ${cities[0]}`, `Find museums in ${cities[0]}`, `Finde Museen in ${cities[0]}`]));
   return suggestions;
 }
 
@@ -218,12 +224,6 @@ function shortCategory(category: string | null): string | null {
   return value || null;
 }
 
-function joinNames(names: string[], language: Language): string {
-  if (names.length <= 1) return names[0] ?? "";
-  const and = language === "ru" ? "и" : language === "de" ? "und" : "and";
-  return `${names.slice(0, -1).join(", ")} ${and} ${names.at(-1)}`;
-}
-
 function dayWordRu(count: number): string {
   const lastTwo = count % 100;
   const last = count % 10;
@@ -231,11 +231,6 @@ function dayWordRu(count: number): string {
   if (last === 1) return "день";
   if (last >= 2 && last <= 4) return "дня";
   return "дней";
-}
-
-/** "до 1 дня", "до 2 дней": the count after «до» takes the genitive. */
-function dayWordGenitiveRu(count: number): string {
-  return count % 10 === 1 && count % 100 !== 11 ? "дня" : "дней";
 }
 
 function days(count: number): string {
