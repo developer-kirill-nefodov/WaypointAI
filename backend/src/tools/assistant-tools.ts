@@ -2,6 +2,7 @@ import { z } from "zod";
 import type { PlaceView, RecordView, Scope, ToolName } from "@waypoint-ai/shared";
 import { getRecordDetails, getSources, searchNearbyPlaces, searchPlaces, searchRecords } from "../data/record.repository.js";
 import { resolveSettlement } from "../data/settlement.repository.js";
+import { TRIP_STOP_CATEGORIES } from "../assistant/trip-plan-edit.js";
 import type { ToolDefinition } from "../llm/ollama.provider.js";
 import { searchEventsToolDefinition } from "./search-events.js";
 import { executeSearchEventsTool, type SearchEventsToolContext } from "./search-events-tool.js";
@@ -14,10 +15,15 @@ const searchRecordsArgs = z.object({
   limit: z.number().int().min(1).max(50).optional(),
 }).strict();
 const recordDetailsArgs = z.object({ id: z.string().min(1).max(120) }).strict();
+/** Kinds of places the model can ask for by a plain word; each maps to OSM categories in the snapshots. */
+export const PLACE_KINDS: Record<string, readonly (string | undefined)[]> = { ...TRIP_STOP_CATEGORIES, hotel: ["tourism:hotel"], any: [undefined] };
+const SIGHTSEEING = [...TRIP_STOP_CATEGORIES.attraction, ...TRIP_STOP_CATEGORIES.museum];
+
 const searchPlacesArgs = z.object({
   query: z.string().max(100).optional(),
+  kind: z.enum(Object.keys(PLACE_KINDS) as [string, ...string[]]).optional(),
   category: z.string().max(120).optional(),
-  countryCode: z.enum(["DE", "PL", "RO", "FR", "IT", "ES"]).optional(),
+  countryCode: z.string().regex(/^[A-Z]{2}$/).optional(),
   city: z.string().max(120).optional(),
   limit: z.number().int().min(1).max(50).optional(),
 }).strict();
@@ -51,10 +57,11 @@ export const assistantToolDefinitions: ToolDefinition[] = [
     function: {
       name: "search_places",
       description: "Search named places and POIs in the local OpenStreetMap snapshots. Put a named city in city (local spelling); query is only for a place name, street, or postcode fragment.",
-      parameters: { type: "object", additionalProperties: false, properties: {
+      parameters: { type: "object", additionalProperties: false, required: ["kind"], properties: {
         query: { type: "string", maxLength: 100 },
-        category: { type: "string", maxLength: 120, description: "Partial OSM category tag, e.g. restaurant, amenity:cafe, place:city, or shop:supermarket." },
-        countryCode: { type: "string", enum: ["DE", "PL", "RO", "FR", "IT", "ES"] },
+        kind: { type: "string", enum: Object.keys(PLACE_KINDS), description: "Kind of places the user asks for (museum, park, restaurant, ...); any when searching by name." },
+        category: { type: "string", maxLength: 120, description: "Raw OSM category tag for other kinds, e.g. shop:supermarket or place:city." },
+        countryCode: { type: "string", pattern: "^[A-Z]{2}$" },
         city: { type: "string", maxLength: 120 },
         limit: { type: "integer", minimum: 1, maximum: 50 },
       } },
@@ -86,6 +93,8 @@ export interface ToolExecutionResult {
   totalRecords?: number;
   places?: PlaceView[];
   totalPlaces?: number;
+  /** What a place search looked for, so the reply can say it from the request rather than from the model. */
+  placeSearch?: { kind: string | null; city: string | null; query: string | null; category: string | null };
   sourceIds?: string[];
   resultsFound: number;
 }
@@ -140,10 +149,6 @@ export async function executeAssistantTool(
   if (name === "search_places") {
     const parsed = searchPlacesArgs.safeParse(rawArgs);
     if (!parsed.success) return { content: { error: "Invalid place search parameters." }, resultsFound: 0 };
-    // A city with neither category nor query would return whatever rows are nearest, mostly bare addresses.
-    if (parsed.data.city && !parsed.data.category && !parsed.data.query) {
-      return { content: { error: "Add a category for the kind of places, for example tourism:attraction, tourism:museum, or amenity:restaurant, and call search_places again." }, resultsFound: 0 };
-    }
     const limit = Math.min(parsed.data.limit ?? 10, 10);
     const result = await searchPlacesInCity({ ...parsed.data, limit, sourceIds });
     const places = result.places as PlaceView[];
@@ -151,6 +156,7 @@ export async function executeAssistantTool(
       content: { total: result.total, ...(places.length ? {} : { hint: "No matches. Place and city names in the snapshot use their local spelling (Warszawa, Roma, București). If the request named a city, retry once with that city in the city field and no query." }), places: places.map((place) => ({ id: place.id, name: place.name, category: place.category, countryCode: place.countryCode, city: place.city, postcode: place.postcode, street: place.street, houseNumber: place.houseNumber, details: place.details, lat: place.lat, lon: place.lon })) },
       places,
       totalPlaces: result.total,
+      placeSearch: { kind: parsed.data.kind ?? null, city: parsed.data.city ?? null, query: parsed.data.query ?? null, category: parsed.data.category ?? null },
       resultsFound: places.length,
     };
   }
@@ -209,18 +215,35 @@ const CITY_RADIUS_METERS: Record<string, number> = { "place:city": 8_000, "place
  * its verified settlement (local or English name) and searched by radius; the address field is the fallback.
  */
 async function searchPlacesInCity(input: z.infer<typeof searchPlacesArgs> & { limit: number; sourceIds?: string[] }) {
+  const { kind, ...rest } = input;
+  // A city with no kind, category, or name would return whatever rows are nearest (mostly bare addresses),
+  // so it means sights: attractions and museums.
+  const categories = input.category
+    ? [input.category]
+    : kind ? PLACE_KINDS[kind]! : input.city && !input.query ? SIGHTSEEING : [undefined];
   if (input.city) {
     const settlement = await resolveSettlement(input.city);
     if (settlement) {
-      const { city: _city, countryCode: _countryCode, ...filters } = input;
-      const nearby = await searchNearbyPlaces({
+      const { city: _city, countryCode: _countryCode, ...filters } = rest;
+      const results = await Promise.all(categories.map((category) => searchNearbyPlaces({
         ...filters,
+        category,
         center: { lat: settlement.lat, lon: settlement.lon },
         radiusMeters: CITY_RADIUS_METERS[settlement.category] ?? 2_500,
-      });
-      const named = nearby.places.filter((place) => /\p{L}/u.test(place.name));
-      if (named.length) return { total: nearby.total, places: named };
+      })));
+      const named = interleave(results.map((result) => result.places.filter((place) => /\p{L}/u.test(place.name)))).slice(0, input.limit);
+      if (named.length) return { total: results.reduce((sum, result) => sum + result.total, 0), places: named };
     }
   }
-  return searchPlaces(input);
+  const results = await Promise.all(categories.map((category) => searchPlaces({ ...rest, category })));
+  return { total: results.reduce((sum, result) => sum + result.total, 0), places: interleave(results.map((result) => result.places)).slice(0, input.limit) };
+}
+
+/** Alternates between result lists so a kind with several categories shows some of each. */
+function interleave<T extends { id: string }>(lists: T[][]): T[] {
+  const merged: T[] = [];
+  for (let position = 0; position < Math.max(0, ...lists.map((list) => list.length)); position += 1) {
+    for (const list of lists) if (list[position]) merged.push(list[position]!);
+  }
+  return [...new Map(merged.map((item) => [item.id, item])).values()];
 }

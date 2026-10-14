@@ -32,7 +32,8 @@ export default defineConfig({
   },
   server: {
     proxy: {
-      "/api": { target: "http://127.0.0.1:8000", changeOrigin: true, ws: true },
+      // VITE_API_PROXY_TARGET points a second dev server at another API port, for example a test backend.
+      "/api": { target: process.env.VITE_API_PROXY_TARGET ?? "http://127.0.0.1:8000", changeOrigin: true, ws: true },
     },
   },
 });

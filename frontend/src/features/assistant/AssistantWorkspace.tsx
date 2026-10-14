@@ -1,4 +1,4 @@
-import { lazy, Suspense, useCallback, useEffect, useRef, useState, type FormEvent, type KeyboardEvent as ReactKeyboardEvent } from "react";
+import { Fragment, lazy, Suspense, useCallback, useEffect, useRef, useState, type FormEvent, type KeyboardEvent as ReactKeyboardEvent } from "react";
 import { ArrowUp, ArrowUpRight, BrainCircuit, ChevronDown, Clock3, House, Layers3, MapPinned, MoreHorizontal, Plus, Radar, RefreshCw, SlidersHorizontal, Sparkles, Square, Trash2 } from "lucide-react";
 import type { PlaceView, RecordView, Scope, ServerFrame, SourceView, TripPlan, SearchArea } from "@waypoint-ai/shared";
 import MapPanel from "../../widgets/map/MapPanel";
@@ -11,7 +11,8 @@ import Logo from "../../shared/ui/Logo";
 import { pageCaption, pageFromPath, pageTitle, pathForPage, type AppPage } from "../../shared/routing";
 import MicButton, { voiceStatusText } from "../voice/MicButton";
 import { isVoiceFrame, useVoiceInput } from "../voice/useVoiceInput";
-import { compactResult, lastUserMessage, readSavedConversation, writeSavedConversation, type ChatResult, type Message, type SavedChat } from "./chat-storage";
+import { compactResult, lastUserMessage, readSavedConversation, writeSavedConversation, type ChatResult, type Message, type SavedChat, type TurnStep } from "./chat-storage";
+import TurnSteps from "./TurnSteps";
 import { contextSuggestions, rotateSuggestions, starterSuggestions } from "./suggestions";
 
 const MESSAGE_ANCHOR_OFFSET_PX = 16;
@@ -61,6 +62,8 @@ export default function AssistantWorkspace() {
   const [elapsedMs, setElapsedMs] = useState(0);
   const [activeRequestId, setActiveRequestId] = useState<string | null>(null);
   const [progressLabel, setProgressLabel] = useState<string | null>(null);
+  const [turnSteps, setTurnSteps] = useState<TurnStep[]>([]);
+  const turnStepsRef = useRef<TurnStep[]>([]);
   const [messages, setMessages] = useState<Message[]>(savedConversation.messages);
   const [localChatId, setLocalChatId] = useState(savedConversation.id);
   const [recentChats, setRecentChats] = useState<SavedChat[]>(savedConversation.recentChats);
@@ -119,6 +122,12 @@ export default function AssistantWorkspace() {
           }
           if (frame.type === "session.ready") setCapabilities({ assistantStatus: frame.assistantStatus, modelLabel: frame.modelLabel, demoMode: frame.demoMode, voiceInput: frame.voiceInput });
           if (frame.type === "turn.status") setProgressLabel(frame.label);
+          if (frame.type === "turn.step") {
+            const step: TurnStep = { id: frame.stepId, label: frame.label, state: frame.state, ...(frame.detail ? { detail: frame.detail } : {}) };
+            const current = turnStepsRef.current;
+            turnStepsRef.current = current.some((item) => item.id === step.id) ? current.map((item) => item.id === step.id ? step : item) : [...current, step];
+            setTurnSteps(turnStepsRef.current);
+          }
           if (frame.type === "tool.started") setProgressLabel(frame.label);
           if (frame.type === "turn.accepted") setConversationId(frame.conversationId);
           if (frame.type === "turn.error") {
@@ -127,7 +136,8 @@ export default function AssistantWorkspace() {
             setPending(false);
             setActiveRequestId(null);
             setProgressLabel(null);
-            setMessages((current) => [...current, { role: "assistant", text: frame.message, durationMs }]);
+            const steps = finishedSteps();
+            setMessages((current) => [...endStreaming(current), { role: "assistant", text: frame.message, durationMs, steps }]);
           }
           if (frame.type === "turn.clarification") {
             const durationMs = elapsedSince(requestStartedAtRef.current);
@@ -136,7 +146,8 @@ export default function AssistantWorkspace() {
             setPending(false);
             setActiveRequestId(null);
             setProgressLabel(null);
-            setMessages((current) => [...current, { role: "assistant", text: frame.message, choices: frame.choices, durationMs }]);
+            const steps = finishedSteps();
+            setMessages((current) => [...endStreaming(current), { role: "assistant", text: frame.message, choices: frame.choices, durationMs, steps }]);
           }
           if (frame.type === "turn.completed") {
             const durationMs = elapsedSince(requestStartedAtRef.current);
@@ -154,9 +165,11 @@ export default function AssistantWorkspace() {
             setAppliedFilters(frame.appliedFilters);
             setResultSources(frame.sources);
             setSuggestionOffset(0);
-            setMessages((current) => current.at(-1)?.role === "assistant" && current.at(-1)?.text === frame.assistantMessage
-              ? [...current.slice(0, -1), { ...current.at(-1)!, durationMs }]
-              : [...current, { role: "assistant", text: frame.assistantMessage, durationMs }]);
+            // The streamed text is replaced by the final message, which is the authoritative version.
+            const steps = finishedSteps();
+            setMessages((current) => current.at(-1)?.streaming
+              ? [...current.slice(0, -1), { role: "assistant", text: frame.assistantMessage, durationMs, steps }]
+              : [...current, { role: "assistant", text: frame.assistantMessage, durationMs, steps }]);
           }
           if (frame.type === "turn.cancelled") {
             const durationMs = elapsedSince(requestStartedAtRef.current);
@@ -165,12 +178,13 @@ export default function AssistantWorkspace() {
             setActiveRequestId(null);
             setProgressLabel(null);
             const activeLanguage = readLanguage();
-            setMessages((current) => [...current, { role: "assistant", text: translate(activeLanguage, "Запрос остановлен.", "Request stopped."), durationMs }]);
+            const steps = finishedSteps();
+            setMessages((current) => [...endStreaming(current), { role: "assistant", text: translate(activeLanguage, "Запрос остановлен.", "Request stopped."), durationMs, steps }]);
           }
           if (frame.type === "assistant.delta") setMessages((current) => {
             const last = current.at(-1);
-            if (last?.role === "assistant") return [...current.slice(0, -1), { ...last, text: last.text + frame.text }];
-            return [...current, { role: "assistant", text: frame.text }];
+            if (last?.streaming) return [...current.slice(0, -1), { ...last, text: last.text + frame.text }];
+            return [...current, { role: "assistant", text: frame.text, streaming: true }];
           });
       },
       onState: (state, reconnect) => {
@@ -191,8 +205,10 @@ export default function AssistantWorkspace() {
           const durationMs = elapsedSince(requestStartedAtRef.current);
           requestStartedAtRef.current = null;
           const activeLanguage = readLanguage();
-          setMessages((current) => [...current, {
+          const steps = finishedSteps();
+          setMessages((current) => [...endStreaming(current), {
             role: "assistant",
+            steps,
             text: translate(
               activeLanguage,
               "Соединение с сервером прервалось, запрос не завершён. Отправьте его ещё раз после переподключения.",
@@ -284,6 +300,14 @@ export default function AssistantWorkspace() {
     viewport.scrollTop = maxScrollTop;
   }, [messages, pending, progressLabel]);
 
+  /** The steps of the turn that just ended; a step still running when the turn ends is shown as not finished. */
+  function finishedSteps(): TurnStep[] | undefined {
+    const steps = turnStepsRef.current.map((step) => step.state === "running" ? { ...step, state: "failed" as const } : step);
+    turnStepsRef.current = [];
+    setTurnSteps([]);
+    return steps.length ? steps : undefined;
+  }
+
   function submit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     const message = draft.trim();
@@ -296,19 +320,16 @@ export default function AssistantWorkspace() {
     const requestId = crypto.randomUUID();
     setLastSubmittedQuery(message);
     setSuggestionOffset(0);
-    setMapPlaces([]);
-    setMapRecords([]);
-    setTripPlan(null);
-    setSearchArea(null);
-    setResultsLoaded(false);
+    // The current result (a trip plan above all) stays on the map while the next turn runs; a completed turn
+    // replaces it, and a clarifying question, an error, or a cancel leaves it as it was.
     setSelectedResultKey(null);
-    setAppliedFilters([]);
-    setResultSources([]);
     setPending(true);
     requestStartedAtRef.current = performance.now();
     setElapsedMs(0);
     setActiveRequestId(requestId);
     setProgressLabel(translate(language, "Отправляю запрос на локальный сервер", "Sending request to the local server"));
+    turnStepsRef.current = [];
+    setTurnSteps([]);
     const dateRange: Scope["dateRange"] = fromDate || toDate ? {
       ...(fromDate ? { from: localDateBoundary(fromDate, false) } : {}),
       ...(toDate ? { to: localDateBoundary(toDate, true) } : {}),
@@ -457,6 +478,16 @@ export default function AssistantWorkspace() {
     followLatestMessageRef.current = remaining <= 48;
   }
 
+  /** The live feed of the running turn: the current step with a timer, then the steps already finished. */
+  function renderLiveProgress() {
+    const running = [...turnSteps].reverse().find((step) => step.state === "running");
+    const label = running?.label ?? progressLabel ?? translate(language, "Думаю", "Thinking");
+    return <div className="assistant-progress live" role="status" aria-live="polite">
+      <div className="assistant-progress-head"><span className="progress-dot" /><span>{label}</span><span className="thinking-elapsed">{t("Думает", "Thinking")} · {formatElapsed(elapsedMs, language)}</span></div>
+      {turnSteps.some((step) => step.state !== "running") && <TurnSteps steps={turnSteps.filter((step) => step.state !== "running")} language={language} />}
+    </div>;
+  }
+
   return (
     <main className="app-shell">
       <aside className="rail">
@@ -531,11 +562,13 @@ export default function AssistantWorkspace() {
             </div>
             <div className="messages-scroll-frame">
               <div className="messages" ref={messagesRef} onScroll={updateMessageScrollPosition} tabIndex={0} aria-label={t("Сообщения чата", "Chat messages")}>
-                {messages.map((message, index) => <article key={`${index}-${message.role}`} className={`message ${message.role}`}>
+                {messages.map((message, index) => <Fragment key={`${index}-${message.role}`}>
+                {pending && message.streaming && index === messages.length - 1 && renderLiveProgress()}
+                <article className={`message ${message.role}${message.streaming ? " streaming" : ""}`}>
                   {message.role === "assistant" && <span className="message-avatar"><Sparkles size={14} /></span>}
-                  {message.role === "assistant" ? <div className="message-body"><div className="message-content"><Suspense fallback={<p>{message.text}</p>}><MarkdownMessage text={message.text} /></Suspense></div>{message.choices?.length ? <div className="clarification-choices">{message.choices.map((choice) => <button key={choice.id} type="button" disabled={pending} onClick={() => { setDraft(choice.label); composerRef.current?.focus(); }}>{choice.label}</button>)}</div> : null}{message.durationMs !== undefined && <span className="message-duration"><Clock3 size={12} aria-hidden="true" />{t("Время ответа", "Response time")} · {formatElapsed(message.durationMs, language)}</span>}</div> : <p>{message.text}</p>}
-                </article>)}
-                {pending && progressLabel && <div className="assistant-progress" role="status" aria-live="polite"><span className="progress-dot" /><span>{progressLabel}</span><span className="thinking-elapsed">{t("Думает", "Thinking")} · {formatElapsed(elapsedMs, language)}</span></div>}
+                  {message.role === "assistant" ? <div className="message-body"><div className="message-content"><Suspense fallback={<p>{message.text}</p>}><MarkdownMessage text={message.text} /></Suspense></div>{message.choices?.length ? <div className="clarification-choices">{message.choices.map((choice) => <button key={choice.id} type="button" disabled={pending} onClick={() => { setDraft(choice.label); composerRef.current?.focus(); }}>{choice.label}</button>)}</div> : null}{message.steps?.length ? <TurnSteps steps={message.steps} language={language} collapsed /> : null}{message.durationMs !== undefined && <span className="message-duration"><Clock3 size={12} aria-hidden="true" />{t("Время ответа", "Response time")} · {formatElapsed(message.durationMs, language)}</span>}</div> : <p>{message.text}</p>}
+                </article></Fragment>)}
+                {pending && !messages.at(-1)?.streaming && renderLiveProgress()}
               </div>
               <div className="chat-edge-fade chat-edge-fade-top" aria-hidden="true" />
               <div className="chat-edge-fade chat-edge-fade-bottom" aria-hidden="true" />
@@ -667,4 +700,10 @@ function connectionLabel(connection: ConnectionState, reconnect: ReconnectInfo, 
   if (language === "ru") return `Переподключение через ${seconds} с · попытка ${reconnect.attempt}`;
   if (language === "de") return `Neuverbindung in ${seconds} s · Versuch ${reconnect.attempt}`;
   return `Reconnecting in ${seconds} s · attempt ${reconnect.attempt}`;
+}
+
+/** Ends the streaming state of the last message; its partial text stays visible. */
+function endStreaming(messages: Message[]): Message[] {
+  const last = messages.at(-1);
+  return last?.streaming ? [...messages.slice(0, -1), { role: last.role, text: last.text }] : messages;
 }

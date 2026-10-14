@@ -232,8 +232,12 @@ export function finalizeTripPlan(plan: TripPlan, placeById: Map<string, PlaceVie
   }
   const supportedDays = plan.days.filter((entry) => entry.stopPlaceIds.length > 0).length;
   const sourceIds = [...new Set(plan.days.flatMap((entry) => entry.stopPlaceIds).flatMap((id) => placeById.get(id)?.sourceId ?? []))];
+  // A city whose days were all removed is no longer part of the trip.
+  const visited = new Set(plan.days.flatMap((entry) => entry.city ?? []));
+  const cities = plan.cities?.filter((city) => visited.has(city.name));
   return {
     ...plan,
+    ...(cities?.length ? { cities, city: cities.map((city) => city.name).join(", ").slice(0, 120) } : {}),
     totalDays: plan.days.length,
     supportedDays,
     status: supportedDays === plan.days.length ? "ready" : "partial",

@@ -2,8 +2,14 @@ import type { ClientFrame, PlaceView, RecordView, ServerFrame, ToolName } from "
 import { getConversationMessages, getConversationTripPlan, saveConversationTurn } from "../data/conversation.repository.js";
 import { getPlaceDetails, getPlacesByIds, getRecordDetails, getSources, searchNearbyPlaces, searchPlaces } from "../data/record.repository.js";
 import { ALLOWED_TOOLS } from "../tools/allowlist.js";
-import { assistantToolDefinitions, executeAssistantTool, type SearchArea } from "../tools/assistant-tools.js";
-import { chat, OllamaUnavailableError, type ChatMessage, type ToolDefinition } from "../llm/ollama.provider.js";
+import { assistantToolDefinitions, executeAssistantTool, type SearchArea, type ToolExecutionResult } from "../tools/assistant-tools.js";
+import { formatPlaceResultsMessage } from "./place-results-message.js";
+import { chat, OllamaUnavailableError, type ChatMessage, type ChatOptions, type ToolDefinition } from "../llm/ollama.provider.js";
+
+/** A tool call needs well under this many tokens; a plain-text first answer is cut here and retried. */
+const FIRST_STEP_MAX_TOKENS = 160;
+/** Answers without data are short; the cap keeps a chatty reply from taking a minute on a laptop GPU. */
+const REPLY_MAX_TOKENS = 320;
 import { env } from "../config/env.js";
 import { releaseInference, tryAcquireInference } from "../llm/inference-gate.js";
 import { resolveSettlement } from "../data/settlement.repository.js";
@@ -15,7 +21,7 @@ import { applyTripPlanEdits, describePlanForModel, parseEditTripPlanArgs, type T
 import { executePlanTrip, type PlanTripDependencies } from "./plan-trip.js";
 import { EDIT_TRIP_PLAN_TOOL, editTripPlanToolDefinition } from "../tools/edit-trip-plan.js";
 import { PLAN_TRIP_TOOL, planTripToolDefinition } from "../tools/plan-trip.js";
-import { parseReplyArgs, REPLY_TOOL, replyToolDefinition } from "../tools/reply.js";
+import { REPLY_TOOL, replyToolDefinition } from "../tools/reply.js";
 import { classifyPlanIntent, type PlanIntent } from "./plan-intent.js";
 
 export async function processTurn(
@@ -60,13 +66,26 @@ export async function processTurn(
   // The plan this conversation already shows; when set, the turn edits it instead of planning from scratch.
   let editablePlan: { plan: TripPlan; places: PlaceView[] } | null = null;
   let history: ChatMessage[] = [];
+  let stepCount = 0;
+  /** One line of the progress feed the chat shows while the turn runs. */
+  const startStep = (label: string) => {
+    const stepId = `step-${++stepCount}`;
+    const send = (state: "running" | "done" | "failed", detail?: string) => emit({ protocolVersion: 1, type: "turn.step", requestId: frame.requestId, stepId, label: label.slice(0, 160), state, ...(detail ? { detail: detail.slice(0, 160) } : {}) });
+    send("running");
+    return { done: (detail?: string) => send("done", detail), fail: (detail?: string) => send("failed", detail) };
+  };
+  /** Replies assembled from database rows go out section by section, in the order they were built. */
+  const emitSections = (message: string) => {
+    const sections = message.split("\n\n");
+    sections.forEach((section, index) => emit({ protocolVersion: 1, type: "assistant.delta", requestId: frame.requestId, text: index < sections.length - 1 ? `${section}\n\n` : section }));
+  };
   const emitTripPlan = async (plan: TripPlan, places: PlaceView[], message: string, tool: ToolName) => {
     const sources = await getSources(plan.sourceIds);
     // The model sees the stored plan in full on the next turn, so history keeps only the reply's first paragraph
     // (what was built or changed) and the small context window is not filled with stop lists.
     await saveConversationTurn(conversationId, workspaceId, [...history, { role: "user", content: frame.message }, { role: "assistant", content: message.split("\n\n")[0]! }], plan);
     turnOutcome = "completed";
-    emit({ protocolVersion: 1, type: "assistant.delta", requestId: frame.requestId, text: message });
+    emitSections(message);
     emit({
       protocolVersion: 1, type: "turn.completed", requestId: frame.requestId, conversationId, assistantMessage: message, appliedFilters: [
         ...(allowedSourceIds?.length ? [{ key: "sourceIds", value: allowedSourceIds }] : []),
@@ -99,9 +118,9 @@ export async function processTurn(
     ];
     const toolCallLimit = 4;
     emit({ protocolVersion: 1, type: "turn.status", requestId: frame.requestId, phase: "understanding", label: text(language, "Анализирую запрос", "Understanding your request") });
-    const callModel = async (callMessages: ChatMessage[], tools: ToolDefinition[], format?: Record<string, unknown>) => {
+    const callModel = async (callMessages: ChatMessage[], tools: ToolDefinition[], options: ChatOptions = {}) => {
       const startedAt = performance.now();
-      const response = await chat(callMessages, tools, signal, format);
+      const response = await chat(callMessages, tools, signal, options);
       modelCallCount += 1;
       modelDurationMs += response.metrics.totalDurationMs;
       promptEvaluationDurationMs += response.metrics.promptEvaluationDurationMs;
@@ -121,8 +140,16 @@ export async function processTurn(
     // that fit, which a small model uses far more reliably than the full list.
     let planIntent: PlanIntent | null = null;
     if (editablePlan) {
-      planIntent = (await classifyPlanIntent(describePlanForModel(editablePlan.plan, editablePlan.places), conversationHistory, frame.message, (callMessages, format) => callModel(callMessages, [], format))).intent;
+      const intentStep = startStep(text(language, "Определяю, что сделать с планом на карте", "Working out what to do with the plan on the map"));
+      planIntent = (await classifyPlanIntent(describePlanForModel(editablePlan.plan, editablePlan.places), conversationHistory, frame.message, (callMessages, format) => callModel(callMessages, [], { format }))).intent;
+      intentStep.done(planIntent === "change_plan" ? text(language, "изменить план", "change the plan") : planIntent === "new_trip" ? text(language, "новая поездка", "a new trip") : text(language, "вопрос или поиск", "a question or a search"));
       console.info("Assistant plan intent", { requestId: frame.requestId, intent: planIntent });
+    }
+    if (planIntent === "change_plan") {
+      // Earlier edits are stored as plain confirmations ("Added to day 1: …") because history drops tool calls.
+      // A small model imitates them and confirms the next change in text without calling the tool, so the edit
+      // call sees the user's messages and the current plan only.
+      messages = messages.filter((entry, index) => index === 0 || entry.role !== "assistant");
     }
     const toolsForTurn = planIntent === "change_plan"
       ? [editTripPlanToolDefinition, replyToolDefinition]
@@ -134,11 +161,30 @@ export async function processTurn(
     let finalText = "";
     let finished = false;
     let retriedWithoutTool = false;
+    let lastPlaceSearch: { search: NonNullable<ToolExecutionResult["placeSearch"]>; places: PlaceView[]; total: number } | null = null;
+    let usedOtherDataTool = false;
     let editedPlan: { plan: TripPlan; places: PlaceView[]; changes: TripPlanChange[] } | null = null;
     let createdPlan: { plan: TripPlan; places: PlaceView[] } | null = null;
     let routeModeQuestion: string[] | null = null;
+    let replyRequested = false;
+    let streamed = false;
+    let thinking = startStep(text(language, "Понимаю запрос", "Understanding the request"));
     for (let iteration = 0; iteration < 4 && !finished; iteration += 1) {
-      const response = await callModel(messages, toolsForTurn);
+      // After events, records, or sources were fetched, the model's answer is the reply itself, so it is streamed.
+      // First steps are not: a plain-text first answer may be withheld, and place and plan replies come from rows.
+      const streamAnswer = toolCallsExecuted > 0 && usedOtherDataTool;
+      const writing = streamAnswer ? startStep(text(language, "Пишу ответ", "Writing the answer")) : null;
+      // The first call only has to choose a tool; a short token budget stops a small model that starts writing a
+      // long plain-text answer instead (that text would be withheld anyway) from costing a minute.
+      const response = await callModel(messages, toolsForTurn, {
+        ...(streamAnswer ? { onDelta: (fragment: string) => {
+          streamed = true;
+          emit({ protocolVersion: 1, type: "assistant.delta", requestId: frame.requestId, text: fragment });
+        } } : {}),
+        ...(toolCallsExecuted === 0 && !retriedWithoutTool && planIntent !== "other" ? { maxTokens: FIRST_STEP_MAX_TOKENS } : {}),
+      });
+      thinking.done();
+      writing?.done();
       const assistantMessage = response.message;
       messages.push({ role: "assistant", content: assistantMessage.content ?? "", tool_calls: assistantMessage.tool_calls?.map((call, index) => ({ type: "function", function: { ...call.function, index } })) });
       const calls = assistantMessage.tool_calls ?? [];
@@ -150,11 +196,19 @@ export async function processTurn(
           console.warn("Assistant answered without a tool call; retrying", { requestId: frame.requestId, text: assistantMessage.content.slice(0, 300) });
           // The unverified text is dropped so it is neither shown nor stored in the history.
           messages.pop();
+          thinking = startStep(text(language, "Уточняю, какие данные нужны", "Checking which data is needed"));
           messages.push({ role: "system", content: `Answer by calling a tool.${editablePlan ? ` If the user wants to change the current trip plan, call ${EDIT_TRIP_PLAN_TOOL}.` : ""} Use a data tool when the reply depends on places, events, records, sources, or a trip plan; call ${REPLY_TOOL} only when no data is needed. Never name places or facts that a tool did not return.` });
           continue;
         }
         // After the retry, a plain-text first answer is still unverified: it may claim a change or name places that
         // no tool returned, so it is not shown. Text after tool results is the normal final answer.
+        // After an empty place search the model may answer in text; the answer still comes from the search.
+        if (lastPlaceSearch && !usedOtherDataTool) {
+          finalText = formatPlaceResultsMessage(lastPlaceSearch.search, lastPlaceSearch.places, lastPlaceSearch.total, language);
+          messages.splice(messages.length - 1, 1, { role: "assistant", content: finalText.split("\n\n")[0]! });
+          finished = true;
+          break;
+        }
         const unverified = toolCallsExecuted === 0 && planIntent !== "other";
         finalText = unverified
           ? text(language, "Не получилось обработать запрос. Попробуйте сформулировать его иначе.", "I could not process this request. Please try rephrasing it.")
@@ -173,16 +227,9 @@ export async function processTurn(
         const toolCallName = call.function.name;
         console.info("Assistant tool call", { requestId: frame.requestId, iteration, tool: toolCallName, arguments: call.function.arguments });
         if (toolCallName === REPLY_TOOL) {
-          const reply = parseReplyArgs(call.function.arguments);
-          if (reply) {
-            finalText = reply;
-            finished = true;
-            // Saved history keeps only plain assistant messages, so the reply is stored as one.
-            messages.push({ role: "assistant", content: reply });
-            break;
-          }
-          messages.push({ role: "tool", tool_name: toolCallName, content: JSON.stringify({ error: "reply needs a non-empty text." }) });
-          continue;
+          replyRequested = true;
+          finished = true;
+          break;
         }
         if (!ALLOWED_TOOLS.includes(toolCallName as ToolName)) {
           messages.push({ role: "tool", tool_name: toolCallName, content: JSON.stringify({ error: "Tool is not allowlisted." }) });
@@ -193,12 +240,15 @@ export async function processTurn(
         if (toolName === PLAN_TRIP_TOOL) {
           emit({ protocolVersion: 1, type: "turn.status", requestId: frame.requestId, phase: "searching", label: text(language, "Собираю план из проверенных точек", "Building a plan from verified places") });
           emit({ protocolVersion: 1, type: "tool.started", requestId: frame.requestId, tool: toolName, label: toolLabel(toolName, language) });
+          const toolStep = startStep(toolStepLabel(toolName, call.function.arguments, language));
           const toolStartedAt = performance.now();
           const outcome = await executePlanTrip(call.function.arguments, planTripDependencies(allowedSourceIds), allowedSourceIds);
           toolDurationMs += Math.round(performance.now() - toolStartedAt);
           console.info("Assistant plan_trip call", { requestId: frame.requestId, arguments: call.function.arguments, outcome: outcome.kind });
           if (outcome.kind === "planned") createdPlan = { plan: outcome.plan, places: outcome.places };
           if (outcome.kind === "ask_route_mode") routeModeQuestion = outcome.cities;
+          if (outcome.kind === "error") toolStep.fail(text(language, "не получилось, уточняю", "did not work, checking"));
+          else toolStep.done(outcome.kind === "planned" ? text(language, `${outcome.plan.totalDays} дн., ${outcome.places.length} точек`, `${outcome.plan.totalDays} days, ${outcome.places.length} stops`) : text(language, "нужно выбрать маршрут", "route choice needed"));
           messages.push({ role: "tool", tool_name: toolName, content: JSON.stringify(outcome.kind === "error" ? { error: outcome.error } : { ok: true }) });
           emit({ protocolVersion: 1, type: "tool.completed", requestId: frame.requestId, tool: toolName, recordsFound: outcome.kind === "planned" ? outcome.places.length : 0 });
           continue;
@@ -206,18 +256,22 @@ export async function processTurn(
         if (toolName === EDIT_TRIP_PLAN_TOOL) {
           emit({ protocolVersion: 1, type: "turn.status", requestId: frame.requestId, phase: "searching", label: text(language, "Изменяю план поездки", "Updating the trip plan") });
           emit({ protocolVersion: 1, type: "tool.started", requestId: frame.requestId, tool: toolName, label: toolLabel(toolName, language) });
+          const toolStep = startStep(toolStepLabel(toolName, call.function.arguments, language));
           const toolStartedAt = performance.now();
           const current: { plan: TripPlan; places: PlaceView[]; changes?: TripPlanChange[] } | null = editedPlan ?? editablePlan;
           const outcome = await runTripPlanEdit(current, call.function.arguments, allowedSourceIds);
           toolDurationMs += Math.round(performance.now() - toolStartedAt);
           console.info("Assistant edit_trip_plan call", { requestId: frame.requestId, arguments: call.function.arguments, ok: outcome.ok, ...(outcome.ok ? {} : { error: outcome.error }) });
           if (outcome.ok) editedPlan = { plan: outcome.plan, places: outcome.places, changes: [...(current?.changes ?? []), ...outcome.changes] };
+          if (outcome.ok) toolStep.done();
+          else toolStep.fail(text(language, "не получилось, уточняю", "did not work, checking"));
           messages.push({ role: "tool", tool_name: toolName, content: JSON.stringify(outcome.ok ? { ok: true, changes: outcome.changes } : { error: outcome.error }) });
           emit({ protocolVersion: 1, type: "tool.completed", requestId: frame.requestId, tool: toolName, recordsFound: outcome.ok ? outcome.places.length : 0 });
           continue;
         }
         emit({ protocolVersion: 1, type: "turn.status", requestId: frame.requestId, phase: "searching", label: text(language, "Ищу в локальной базе", "Searching the local database") });
         emit({ protocolVersion: 1, type: "tool.started", requestId: frame.requestId, tool: toolName, label: toolLabel(toolName, language) });
+        const toolStep = startStep(toolStepLabel(toolName, call.function.arguments, language));
         const toolStartedAt = performance.now();
         const result = await executeAssistantTool(
           toolName,
@@ -233,6 +287,8 @@ export async function processTurn(
           found = result.records;
           totalRecords = result.totalRecords ?? result.records.length;
         }
+        if (result.placeSearch) lastPlaceSearch = { search: result.placeSearch, places: result.places ?? [], total: result.totalPlaces ?? 0 };
+        else usedOtherDataTool = true;
         if (result.places) {
           placesFound = [...new Map([...placesFound, ...result.places].map((place) => [place.id, place])).values()];
           totalPlaces = Math.max(totalPlaces, result.totalPlaces ?? result.places.length);
@@ -240,9 +296,42 @@ export async function processTurn(
         if (result.sourceIds) listedSourceIds = result.sourceIds;
         if (result.searchArea) searchArea = result.searchArea;
         emit({ protocolVersion: 1, type: "tool.completed", requestId: frame.requestId, tool: toolName, recordsFound: result.resultsFound });
+        if (result.content && typeof result.content === "object" && "error" in result.content) toolStep.fail(text(language, "не получилось, уточняю", "did not work, checking"));
+        else toolStep.done(text(language, `найдено: ${result.resultsFound}`, `found: ${result.resultsFound}`));
       }
       // A new or edited plan is described from verified rows; the model is not asked to retell it.
       if (finished || createdPlan || editedPlan || routeModeQuestion) break;
+      // Place results are listed from the rows as well, so the answer cannot name places the search did not return.
+      // An empty first search goes back to the model once, which can retry with another spelling or kind.
+      if (lastPlaceSearch && !usedOtherDataTool && (lastPlaceSearch.places.length || iteration > 0)) {
+        finalText = formatPlaceResultsMessage(lastPlaceSearch.search, lastPlaceSearch.places, lastPlaceSearch.total, language);
+        placesFound = lastPlaceSearch.places;
+        totalPlaces = lastPlaceSearch.total;
+        messages.push({ role: "assistant", content: finalText.split("\n\n")[0]! + (lastPlaceSearch.places.length ? ` ${lastPlaceSearch.places.map((place) => place.name).join("; ")}` : "") });
+        finished = true;
+        break;
+      }
+    }
+    if (replyRequested) {
+      // The model chose to answer without data. The answer is written by a separate, tool-free call with a short
+      // prompt: given the full prompt, which says every answer starts with a tool call, a small model writes a tool
+      // call as text instead of an answer.
+      messages.pop();
+      const writing = startStep(text(language, "Пишу ответ", "Writing the answer"));
+      const response = await callModel([
+        { role: "system", content: replyPrompt(language, editablePlan ? describePlanForModel(editablePlan.plan, editablePlan.places) : null) },
+        ...messages.filter((entry) => (entry.role === "user" || entry.role === "assistant") && !entry.tool_calls?.length),
+      ], [], { maxTokens: REPLY_MAX_TOKENS, onDelta: (fragment) => {
+        streamed = true;
+        emit({ protocolVersion: 1, type: "assistant.delta", requestId: frame.requestId, text: fragment });
+      } });
+      writing.done();
+      finalText = response.message.content.trim();
+      // A tool call written as text is not an answer; the streamed text is replaced by the final message.
+      if (!finalText || /^[a-z_]+\s*[({]/i.test(finalText)) {
+        finalText = text(language, "Не получилось обработать запрос. Попробуйте сформулировать его иначе.", "I could not process this request. Please try rephrasing it.");
+      }
+      messages.push({ role: "assistant", content: finalText });
     }
     if (routeModeQuestion) {
       const cities = routeModeQuestion.join(", ");
@@ -259,6 +348,7 @@ export async function processTurn(
       });
       return;
     }
+    if (createdPlan || editedPlan) startStep(text(language, "Собираю ответ из проверенных данных", "Assembling the answer from verified data")).done();
     if (createdPlan) {
       await emitTripPlan(createdPlan.plan, createdPlan.places, formatTripPlanMessage(createdPlan.plan, createdPlan.places, language), PLAN_TRIP_TOOL);
       return;
@@ -283,7 +373,7 @@ export async function processTurn(
     // The final model reply is already in `messages` from the loop; pushing it again stored every answer twice.
     await saveConversationTurn(conversationId, workspaceId, messages);
     turnOutcome = "completed";
-    emit({ protocolVersion: 1, type: "assistant.delta", requestId: frame.requestId, text: finalText });
+    if (!streamed) emitSections(finalText);
     const mapFeatures = {
       type: "FeatureCollection",
       features: [
@@ -395,4 +485,25 @@ function planTripDependencies(sourceIds: string[] | undefined): PlanTripDependen
       return { places, distancesMeters: Object.assign({}, ...lists.map((list) => list.distancesMeters)) };
     },
   };
+}
+
+/** A short progress line for a tool call, from the validated-or-not arguments; only plain values are shown. */
+function toolStepLabel(tool: ToolName, rawArgs: unknown, language: "en" | "ru" | "de"): string {
+  let args: Record<string, unknown> = {};
+  try { args = (typeof rawArgs === "string" ? JSON.parse(rawArgs) : rawArgs) as Record<string, unknown> ?? {}; } catch { args = {}; }
+  const plain = (value: unknown) => (typeof value === "string" || typeof value === "number" ? String(value).slice(0, 40) : null);
+  const details = tool === "plan_trip" && Array.isArray(args.cities)
+    ? [args.cities.map((city) => plain((city as { name?: unknown })?.name ?? city)).filter(Boolean).join(", "), args.totalDays ? text(language, `${plain(args.totalDays)} дн.`, `${plain(args.totalDays)} days`) : null]
+    : tool === "edit_trip_plan"
+      ? [plain(args.op), args.day ? text(language, `день ${plain(args.day)}`, `day ${plain(args.day)}`) : null, plain(args.category)]
+      : [plain(args.kind), plain(args.category), plain(args.query), plain(args.city), plain(args.place), args.radiusKm ? `${plain(args.radiusKm)} km` : null];
+  const summary = details.filter((value) => value && value !== "any").join(" · ");
+  return summary ? `${toolLabel(tool, language)}: ${summary}` : toolLabel(tool, language);
+}
+
+/** Prompt for writing an answer that needs no data: what the app can do, and the trip plan if one is shown. */
+function replyPrompt(language: "en" | "ru" | "de", plan: string | null): string {
+  return `You are Waypoint AI, a local map assistant. Answer the user's last message in ${language === "ru" ? "Russian" : language === "de" ? "German" : "English"} in at most four short sentences of plain text. Do not call or name tools and do not write code or JSON.
+What the app can do: find places and sights in the local OpenStreetMap snapshots (Berlin, Mazovia, Romania, Île-de-France, Central Italy, the Madrid region); build and edit multi-day trip plans with a driving route per day; search imported INGV earthquakes by place, radius, period, and magnitude; describe the data sources.
+Use only facts from this conversation${plan ? " and the trip plan below" : ""}; never name places, events, or numbers that are not there.${plan ? `\nCurrent trip plan: ${plan}` : ""}`;
 }

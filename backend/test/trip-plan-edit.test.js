@@ -126,3 +126,21 @@ test("plan intent comes from the model's structured answer and falls back to oth
   assert.deepEqual(seen.format.properties.intent.enum, ["change_plan", "new_trip", "other"]);
   assert.equal(seen.messages.at(-1).content, "Plan Paris");
 });
+
+test("a city whose days are all removed leaves the trip", async () => {
+  const twoCities = { ...plan(), city: "Warszawa, Radom", cities: [{ name: "Warszawa", placeId: "w", lat: 52.2, lon: 21, countryCode: "PL" }, { name: "Radom", placeId: "r", lat: 51.4, lon: 21.1, countryCode: "PL" }] };
+  twoCities.days = twoCities.days.map((day, index) => ({ ...day, city: index === 0 ? "Warszawa" : "Radom" }));
+  const { finder } = fakeFinder(catalogue);
+  const result = await applyTripPlanEdits(twoCities, initialPlaces, [{ op: "set_days", totalDays: 1 }], finder);
+  assert.deepEqual(result.plan.cities.map((city) => city.name), ["Warszawa"]);
+  assert.equal(result.plan.city, "Warszawa");
+});
+
+test("place search replies list only returned rows and say what was searched", async () => {
+  const { formatPlaceResultsMessage } = await import("../src/assistant/place-results-message.ts");
+  const message = formatPlaceResultsMessage({ kind: "park", city: "Berlin", query: null, category: null }, [initialPlaces[0]], 103, "ru");
+  assert.match(message, /парки, Berlin/);
+  assert.match(message, /1 из 103/);
+  assert.match(message, /1\. Melt Museum/);
+  assert.match(formatPlaceResultsMessage({ kind: "museum", city: "Roma", query: null, category: null }, [], 0, "en"), /Nothing was found .*museums, Roma/);
+});

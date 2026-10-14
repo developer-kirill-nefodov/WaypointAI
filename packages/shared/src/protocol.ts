@@ -115,6 +115,8 @@ export type ServerFrame =
   | (ClientBase & { type: "session.ready"; connectionId: string; assistantStatus: AssistantStatus; modelLabel: string | null; demoMode: boolean; supportedFilters: string[]; voiceInput?: boolean })
   | (ClientBase & { type: "turn.accepted"; conversationId: string })
   | (ClientBase & { type: "turn.status"; phase: "understanding" | "searching" | "composing"; label: string })
+  /** One line of the progress feed: the same stepId is sent as running, then done or failed. */
+  | (ClientBase & { type: "turn.step"; stepId: string; label: string; state: "running" | "done" | "failed"; detail?: string })
   | (ClientBase & { type: "tool.started"; tool: ToolName; label: string })
   | (ClientBase & { type: "tool.completed"; tool: ToolName; recordsFound: number })
   | (ClientBase & { type: "assistant.delta"; text: string })

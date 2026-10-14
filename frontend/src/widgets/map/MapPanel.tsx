@@ -9,51 +9,71 @@ import { formatKm, translate, type Language } from "../../shared/i18n";
 import "leaflet/dist/leaflet.css";
 import RouteLayer, { RouteGeometry, type RoutePoint, type RouteState } from "./RouteLayer";
 import { visitedAreaOutline } from "./visited-area";
+import { CellCache, cellsForBounds, collectCells, MIN_PLACES_ZOOM, PLACES_PER_CELL, type Cell } from "./viewport-places";
 
 type MapPlace = PlaceView;
 type PlacesResponse = { total: number; places: MapPlace[] };
 type MapItem = { key: string; id: string; sourceId: string; name: string; category: string | null; lat: number; lon: number; kind: "place" | "record"; place?: PlaceView; record?: RecordView; summary?: string };
 
 const apiBase = import.meta.env.VITE_API_BASE ?? "";
+/** The OpenStreetMap tile layer serves up to zoom 18; closer zoom showed an empty map. */
+const MAX_MAP_ZOOM = 18;
 const tileUrl = import.meta.env.VITE_MAP_TILES_URL ?? "https://tile.openstreetmap.org/{z}/{x}/{y}.png";
+
+/** Map-area places, cached per grid cell for the session; one ring of cells beyond the screen is preloaded. */
+const placeCells = new CellCache();
+const loadingCells = new Map<string, Promise<void>>();
 
 function ViewportPlaces({ onPlaces, sourceIds, enabled }: { onPlaces: (places: MapPlace[], total: number) => void; sourceIds: string[]; enabled: boolean }) {
   const map = useMap();
   const sourceFilter = sourceIds.join(",");
   useEffect(() => {
-    let pending: AbortController | null = null;
+    let active = true;
     let debounce: ReturnType<typeof setTimeout> | undefined;
+    let visibleCells: Cell[] = [];
     if (!enabled) {
       onPlaces([], 0);
-      return () => { pending?.abort(); if (debounce) clearTimeout(debounce); };
+      return () => { active = false; };
     }
-
+    // Points already on screen stay until their replacement is known, so panning never blanks the map.
+    const show = () => {
+      if (!active) return;
+      const { places, total } = collectCells(visibleCells, placeCells);
+      const complete = visibleCells.every((cell) => placeCells.get(cell.key));
+      if (places.length || complete) onPlaces(places, total);
+    };
+    const fetchCell = (cell: Cell) => {
+      if (placeCells.get(cell.key)) return;
+      if (!loadingCells.has(cell.key)) {
+        const url = new URL(`${apiBase}/api/v1/data/places`, window.location.origin);
+        url.searchParams.set("bbox", cell.bbox.map((value) => value.toFixed(6)).join(","));
+        url.searchParams.set("limit", String(PLACES_PER_CELL));
+        if (sourceFilter) url.searchParams.set("sourceIds", sourceFilter);
+        loadingCells.set(cell.key, fetch(url)
+          .then((response) => { if (!response.ok) throw new Error("Places are unavailable"); return response.json() as Promise<PlacesResponse>; })
+          .then((result) => placeCells.set(cell.key, { total: result.total, places: result.places }))
+          .catch(() => undefined)
+          .finally(() => { loadingCells.delete(cell.key); }));
+      }
+      void loadingCells.get(cell.key)!.then(show);
+    };
     const load = () => {
-      if (map.getZoom() < 8) {
-        pending?.abort();
+      const zoom = map.getZoom();
+      if (zoom < MIN_PLACES_ZOOM) {
+        visibleCells = [];
         onPlaces([], 0);
         return;
       }
-      pending?.abort();
-      pending = new AbortController();
-      const bounds: LatLngBounds = map.getBounds();
-      const sw = bounds.getSouthWest();
-      const ne = bounds.getNorthEast();
-      const bbox = [sw.lng, sw.lat, ne.lng, ne.lat].map((value) => value.toFixed(6)).join(",");
-      const url = new URL(`${apiBase}/api/v1/data/places`, window.location.origin);
-      url.searchParams.set("bbox", bbox);
-      url.searchParams.set("limit", "500");
-      if (sourceFilter) url.searchParams.set("sourceIds", sourceFilter);
-      fetch(url, { signal: pending.signal })
-        .then((response) => { if (!response.ok) throw new Error("Places are unavailable"); return response.json() as Promise<PlacesResponse>; })
-        .then((result) => onPlaces(result.places, result.total))
-        .catch((error: unknown) => { if (!(error instanceof DOMException && error.name === "AbortError")) onPlaces([], 0); });
+      const toBounds = (bounds: LatLngBounds) => ({ west: bounds.getWest(), south: bounds.getSouth(), east: bounds.getEast(), north: bounds.getNorth() });
+      visibleCells = cellsForBounds(toBounds(map.getBounds()), zoom, sourceFilter);
+      show();
+      for (const cell of cellsForBounds(toBounds(map.getBounds().pad(0.3)), zoom, sourceFilter)) fetchCell(cell);
     };
-    const schedule = () => { if (debounce) clearTimeout(debounce); debounce = setTimeout(load, 180); };
+    const schedule = () => { if (debounce) clearTimeout(debounce); debounce = setTimeout(load, 120); };
     map.on("moveend", schedule);
     schedule();
     return () => {
-      pending?.abort();
+      active = false;
       if (debounce) clearTimeout(debounce);
       map.off("moveend", schedule);
     };
@@ -88,7 +108,7 @@ function RadiusOverlay({ radius, language }: { radius: SearchRadius; language: L
   const signature = `${radius.lat},${radius.lon},${radius.radiusKm}`;
   useEffect(() => {
     const bounds = latLng(radius.lat, radius.lon).toBounds(radius.radiusKm * 2000);
-    map.fitBounds(bounds, { padding: [24, 24], animate: false });
+    map.fitBounds(bounds, { padding: [24, 24], maxZoom: 16, animate: false });
     map.getContainer().scrollIntoView({ block: "nearest", behavior: "smooth" });
     // The signature captures every value the fit depends on.
   }, [map, signature]);
@@ -399,7 +419,7 @@ export default function MapPanel({
         <span className="map-cap">{t("зум", "zoom")} {zoom}+</span>
       </div>
       <div className="map-canvas">
-        <MapContainer center={[49.8, 15.5]} zoom={zoom} minZoom={3} maxZoom={19} scrollWheelZoom>
+        <MapContainer center={[49.8, 15.5]} zoom={zoom} minZoom={3} maxZoom={MAX_MAP_ZOOM} scrollWheelZoom preferCanvas fadeAnimation={false}>
           <MapSizeObserver />
           <ResetViewport revision={resetViewportRevision} />
           <FitToResults items={fitItems} />
@@ -410,7 +430,7 @@ export default function MapPanel({
           {investigation && focus && <FocusPoint focus={focus} />}
           {radius && <RadiusOverlay radius={radius} language={language} />}
           {visitedAreas.length > 0 && <VisitedAreas areas={visitedAreas} language={language} />}
-          {tileUrl && <TileLayer url={tileUrl} attribution='&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap contributors</a>' />}
+          {tileUrl && <TileLayer url={tileUrl} maxZoom={MAX_MAP_ZOOM} keepBuffer={8} updateWhenZooming={false} attribution='&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap contributors</a>' />}
           {countryBoundaries.map(({ code, feature }) => <LeafletGeoJSON key={code} data={feature} style={{ color: COUNTRY_BORDER_COLOR, weight: 1.5, opacity: 0.9, fillColor: COUNTRY_BORDER_COLOR, fillOpacity: 0.02, dashArray: "4 6" }} interactive={false} />)}
           {tripPlan ? tripRouteInputs.map((route) => route.routeStatus === "pending" && <TripRouteLayer key={`${tripPlan.totalDays}:${route.day}:${route.points.map((point) => point.id).join(",")}`} day={route.day} points={route.points} retryKey={dayRouteRetryKeys[route.day] ?? 0} onState={handleDayRouteState} />) : !investigation && <RouteLayer points={routeRequested ? routePoints : []} retryKey={routeRetryKey} onState={handleRouteState} />}
           {tripPlan ? tripRouteInputs.map((route) => <RouteGeometry key={`geometry-${route.day}`} plan={focusedDay !== null && (focusedDay !== "city" ? focusedDay !== route.day : route.area !== "city") ? null : dayRouteStates[route.day]?.plan ?? null} points={focusedDay !== null && (focusedDay !== "city" ? focusedDay !== route.day : route.area !== "city") ? [] : dayRouteStates[route.day]?.orderedPoints ?? []} color={routeColors[(route.day - 1) % routeColors.length]} />) : !investigation && <RouteGeometry plan={routeState.plan} points={routeState.orderedPoints} />}

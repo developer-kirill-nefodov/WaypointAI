@@ -24,8 +24,18 @@ export interface OllamaCallMetrics {
 export interface ChatResult { message: ChatMessage; metrics: OllamaCallMetrics }
 export class OllamaUnavailableError extends Error {}
 
-/** `format` constrains the reply to a JSON schema (Ollama structured outputs); used for small classification calls. */
-export async function chat(messages: ChatMessage[], tools: ToolDefinition[], signal: AbortSignal, format?: Record<string, unknown>): Promise<ChatResult> {
+/**
+ * One chat call. `format` constrains the reply to a JSON schema (Ollama structured outputs). With `onDelta`, the reply
+ * is streamed and each text fragment is passed on as it arrives; the returned message is the complete reply either way.
+ */
+export interface ChatOptions {
+  format?: Record<string, unknown>;
+  onDelta?: (text: string) => void;
+  /** Overrides OLLAMA_NUM_PREDICT for one call, for example a short budget for a call that only picks a tool. */
+  maxTokens?: number;
+}
+
+export async function chat(messages: ChatMessage[], tools: ToolDefinition[], signal: AbortSignal, { format, onDelta, maxTokens }: ChatOptions = {}): Promise<ChatResult> {
   let response: Response;
   try { response = await fetch(new URL("/api/chat", env.OLLAMA_BASE_URL), {
     method: "POST",
@@ -35,12 +45,12 @@ export async function chat(messages: ChatMessage[], tools: ToolDefinition[], sig
       messages,
       tools,
       ...(format ? { format } : {}),
-      stream: false,
+      stream: Boolean(onDelta),
       think: false,
       keep_alive: env.OLLAMA_KEEP_ALIVE,
       options: {
         num_ctx: env.OLLAMA_NUM_CONTEXT,
-        num_predict: env.OLLAMA_NUM_PREDICT,
+        num_predict: maxTokens ?? env.OLLAMA_NUM_PREDICT,
         num_batch: env.OLLAMA_NUM_BATCH,
         temperature: env.OLLAMA_TEMPERATURE,
       },
@@ -51,24 +61,60 @@ export async function chat(messages: ChatMessage[], tools: ToolDefinition[], sig
     throw new OllamaUnavailableError("Local Ollama API could not be reached");
   }
   if (!response.ok) throw new OllamaUnavailableError(`Ollama returned HTTP ${response.status}`);
-  const value: unknown = await response.json();
-  if (!value || typeof value !== "object" || !("message" in value) || !value.message || typeof value.message !== "object") {
+  const payload = onDelta ? await readStream(response, onDelta) : await response.json() as unknown;
+  if (!payload || typeof payload !== "object" || !("message" in payload) || !payload.message || typeof payload.message !== "object") {
     throw new Error("Ollama returned an invalid chat response");
   }
-  const payload = value as Record<string, unknown>;
-  const message = payload.message as ChatMessage;
+  const result = payload as Record<string, unknown>;
+  const message = result.message as ChatMessage;
   if (typeof message.content !== "string") throw new Error("Ollama returned an invalid message");
   return {
     message,
     metrics: {
-      totalDurationMs: nanosecondsToMilliseconds(payload.total_duration),
-      loadDurationMs: nanosecondsToMilliseconds(payload.load_duration),
-      promptEvaluationDurationMs: nanosecondsToMilliseconds(payload.prompt_eval_duration),
-      promptTokenCount: finiteNumber(payload.prompt_eval_count),
-      generationDurationMs: nanosecondsToMilliseconds(payload.eval_duration),
-      generatedTokenCount: finiteNumber(payload.eval_count),
+      totalDurationMs: nanosecondsToMilliseconds(result.total_duration),
+      loadDurationMs: nanosecondsToMilliseconds(result.load_duration),
+      promptEvaluationDurationMs: nanosecondsToMilliseconds(result.prompt_eval_duration),
+      promptTokenCount: finiteNumber(result.prompt_eval_count),
+      generationDurationMs: nanosecondsToMilliseconds(result.eval_duration),
+      generatedTokenCount: finiteNumber(result.eval_count),
     },
   };
+}
+
+/**
+ * Reads Ollama's newline-delimited JSON stream: content fragments are forwarded and joined, tool calls collected,
+ * and the final chunk's metrics kept. Returns the same shape as a non-streamed reply.
+ */
+async function readStream(response: Response, onDelta: (text: string) => void): Promise<unknown> {
+  if (!response.body) throw new Error("Ollama returned an empty stream");
+  const reader = response.body.getReader();
+  const decoder = new TextDecoder();
+  let buffer = "";
+  let content = "";
+  const toolCalls: NonNullable<ChatMessage["tool_calls"]> = [];
+  let last: Record<string, unknown> = {};
+  const handle = (line: string) => {
+    if (!line.trim()) return;
+    const chunk = JSON.parse(line) as Record<string, unknown>;
+    if (typeof chunk.error === "string") throw new OllamaUnavailableError("Ollama stream failed");
+    const message = chunk.message as Partial<ChatMessage> | undefined;
+    if (message?.content) {
+      content += message.content;
+      onDelta(message.content);
+    }
+    if (message?.tool_calls?.length) toolCalls.push(...message.tool_calls);
+    last = chunk;
+  };
+  for (;;) {
+    const { value, done } = await reader.read();
+    if (done) break;
+    buffer += decoder.decode(value, { stream: true });
+    const lines = buffer.split("\n");
+    buffer = lines.pop() ?? "";
+    for (const line of lines) handle(line);
+  }
+  handle(buffer + decoder.decode());
+  return { ...last, message: { role: "assistant", content, ...(toolCalls.length ? { tool_calls: toolCalls } : {}) } };
 }
 
 function finiteNumber(value: unknown): number {

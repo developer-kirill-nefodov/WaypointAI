@@ -100,6 +100,8 @@ apiRouter.get("/data/places", async (request, response, next) => {
       limit: parsed.data.limit,
     });
     const sources = await getSources([...new Set(result.places.map((place) => place.sourceId))]);
+    // The map requests fixed grid cells, so identical URLs repeat while panning; places change only on import.
+    response.setHeader("Cache-Control", "private, max-age=300");
     response.json({
       total: result.total,
       places: result.places,

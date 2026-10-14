@@ -145,6 +145,22 @@ Allowed `phase`: `understanding`, `searching`, `composing`.
 
 Do not send raw SQL, provider credentials, arbitrary URLs, full tool arguments or sensitive fields in these status events.
 
+### `turn.step`
+
+```json
+{
+  "protocolVersion": 1,
+  "type": "turn.step",
+  "requestId": "req-001",
+  "stepId": "step-2",
+  "label": "Searching places: museum · Warszawa",
+  "state": "done",
+  "detail": "found: 10"
+}
+```
+
+One line of the progress feed the chat shows during a turn: understanding the request, classifying a follow-up about the trip plan, each tool call, assembling or writing the answer. Each `stepId` is sent first as `running`, then once as `done` or `failed`, in the order the steps happen. Labels name the tool and at most a few short plain argument values (kind, city, place, days); never full arguments. `turn.status` is still sent for clients that show a single line.
+
 ### `assistant.delta`
 
 ```json
@@ -156,7 +172,7 @@ Do not send raw SQL, provider credentials, arbitrary URLs, full tool arguments o
 }
 ```
 
-Incremental user-facing text only. Never stream model reasoning/thinking content.
+Incremental user-facing text only. Never stream model reasoning/thinking content. A turn can send many deltas: the model's answer is streamed as it is generated, and replies assembled by the backend from database rows (trip plans, place lists) are sent section by section. Clients append deltas in order; `turn.completed.assistantMessage` carries the full final text and replaces the streamed text.
 
 ### `turn.clarification`
 

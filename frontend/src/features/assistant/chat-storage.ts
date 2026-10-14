@@ -1,6 +1,8 @@
 import type { PlaceView, RecordView, SearchArea, SourceView, TripPlan } from "@waypoint-ai/shared";
 
-export type Message = { role: "assistant" | "user"; text: string; durationMs?: number; choices?: Array<{ id: string; label: string }> };
+/** One line of the progress feed shown while a turn runs, kept on the answer it produced. */
+export type TurnStep = { id: string; label: string; state: "running" | "done" | "failed"; detail?: string };
+export type Message = { role: "assistant" | "user"; text: string; durationMs?: number; choices?: Array<{ id: string; label: string }>; steps?: TurnStep[]; streaming?: boolean };
 
 /** What the last completed turn of a chat put on the map, kept so the chat can be reopened with its results. */
 export interface ChatResult {
@@ -116,7 +118,7 @@ function readMessages(value: unknown): Message[] {
     Boolean(item && typeof item === "object" && "role" in item && "text" in item)
     && ((item as Message).role === "user" || (item as Message).role === "assistant")
     && typeof (item as Message).text === "string",
-  ).slice(-MAX_MESSAGES) : [];
+  ).slice(-MAX_MESSAGES).map(({ streaming: _streaming, ...message }) => message) : [];
 }
 
 /** Browser storage can be edited or stale; anything that does not look like a stored result is ignored. */
