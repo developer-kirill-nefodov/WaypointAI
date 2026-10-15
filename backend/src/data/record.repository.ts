@@ -283,7 +283,7 @@ const PLACE_DETAIL_TAGS = [
   "wikidata",
 ];
 
-function extractPlaceDetails(tags: Record<string, unknown> | null | undefined): Record<string, string> {
+export function extractPlaceDetails(tags: Record<string, unknown> | null | undefined): Record<string, string> {
   const details: Record<string, string> = {};
   for (const key of PLACE_DETAIL_TAGS) {
     const value = tags?.[key];

@@ -9,6 +9,8 @@ export type ReadySearch = {
   status: "ready";
   events: InvestigationEvent[];
   total: number;
+  /** Smallest and largest magnitude over every match, not only the loaded pages. */
+  magnitudeRange?: { min: number; max: number } | null;
   nextCursor: string | null;
   appliedFilters: AppliedEventFilters;
   sources: SourceView[];
@@ -34,9 +36,8 @@ export function mergeById<T extends { id: string }>(first: T[], second: T[]): T[
 }
 
 /**
- * Event search for the filter form, with paging and the generation guard shared with
- * natural-language queries: every new result set (filters, refresh, or query) gets a generation,
- * and late responses from older ones are dropped.
+ * Event search for the filter form, with paging and a generation guard: every new result set (filters or
+ * refresh) gets a generation, and late responses from older ones are dropped.
  */
 export function useEventSearch(filters: EventFilterState, reloadKey: number) {
   const [search, setSearch] = useState<SearchState>({ status: "loading" });
@@ -67,14 +68,6 @@ export function useEventSearch(filters: EventFilterState, reloadKey: number) {
     setRefreshing(false);
     setLoadMoreError(null);
   }, []);
-
-  /** Starts a result set that replaces the rows from outside the filter form (a query). */
-  const startExternalSearch = useCallback((): SearchTicket => {
-    const ticket = startGeneration();
-    setRefreshing(false);
-    setLoadingMore(false);
-    return ticket;
-  }, [startGeneration]);
 
   useEffect(() => {
     const { generation, controller } = startGeneration();
@@ -129,9 +122,6 @@ export function useEventSearch(filters: EventFilterState, reloadKey: number) {
     loadMoreError,
     lastDurationMs,
     loadMore,
-    startExternalSearch,
-    showResults,
-    isCurrent,
   };
 }
 

@@ -45,7 +45,7 @@
         {
           "allOf": [
             { "$ref": "#/$defs/base" },
-            { "type": "object", "required": ["requestId"], "properties": { "type": { "const": "session.start" } } }
+            { "type": "object", "required": ["requestId"], "properties": { "type": { "const": "session.start" }, "workspaceId": { "type": "string", "pattern": "^[\\w.-]{1,120}$" } } }
           ]
         },
         {
@@ -132,6 +132,56 @@
           "allOf": [
             { "$ref": "#/$defs/base" },
             { "type": "object", "required": ["requestId", "stepId", "label", "state"], "properties": { "type": { "const": "turn.step" }, "stepId": { "type": "string", "maxLength": 40 }, "label": { "type": "string", "maxLength": 160 }, "state": { "enum": ["running", "done", "failed"] }, "detail": { "type": "string", "maxLength": 160 } } }
+          ]
+        },
+        {
+          "allOf": [
+            { "$ref": "#/$defs/base" },
+            {
+              "type": "object",
+              "required": ["requestId", "job"],
+              "properties": {
+                "type": { "const": "import.progress" },
+                "job": {
+                  "type": "object",
+                  "required": ["id", "workspaceId", "status", "params", "progress", "sources", "createdAt", "updatedAt", "finishedAt"],
+                  "properties": {
+                    "id": { "type": "string", "format": "uuid" },
+                    "workspaceId": { "type": "string" },
+                    "status": { "enum": ["running", "succeeded", "partial", "failed", "cancelled"] },
+                    "params": { "type": "object", "required": ["kind"], "properties": { "kind": { "enum": ["events", "osm_area", "osm_region", "dataset_delete"] } } },
+                    "progress": { "type": "number", "minimum": 0, "maximum": 1 },
+                    "sources": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "required": ["sourceId", "label", "status", "progress", "phase", "windowStart", "stepsDone", "stepsTotal", "fetched", "inserted", "updated", "linkedPlaces", "runId", "errorCode", "retryAfterSeconds"],
+                        "properties": {
+                          "sourceId": { "type": "string" },
+                          "label": { "type": "string" },
+                          "status": { "enum": ["pending", "running", "succeeded", "failed", "cancelled"] },
+                          "progress": { "type": "number", "minimum": 0, "maximum": 1 },
+                          "phase": { "enum": ["fetching", "saving", "linking", "done", null] },
+                          "windowStart": { "type": ["string", "null"] },
+                          "stepsDone": { "type": "integer", "minimum": 0 },
+                          "stepsTotal": { "type": "integer", "minimum": 0 },
+                          "fetched": { "type": "integer", "minimum": 0 },
+                          "inserted": { "type": "integer", "minimum": 0 },
+                          "updated": { "type": "integer", "minimum": 0 },
+                          "linkedPlaces": { "type": "integer", "minimum": 0 },
+                          "runId": { "type": ["string", "null"] },
+                          "errorCode": { "type": ["string", "null"] },
+                          "retryAfterSeconds": { "type": ["integer", "null"] }
+                        }
+                      }
+                    },
+                    "createdAt": { "type": "string" },
+                    "updatedAt": { "type": "string" },
+                    "finishedAt": { "type": ["string", "null"] }
+                  }
+                }
+              }
+            }
           ]
         },
         {

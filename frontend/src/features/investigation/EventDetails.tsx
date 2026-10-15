@@ -1,5 +1,5 @@
 import type { EventDetailsResponse, SourceView } from "@waypoint-ai/shared";
-import { Crosshair, ExternalLink, MapPin } from "lucide-react";
+import { Crosshair, ExternalLink, MapPin, MessageSquare } from "lucide-react";
 import type { RefObject } from "react";
 import { makeT, type Language } from "../../shared/i18n";
 import {
@@ -21,6 +21,8 @@ type EventDetailsProps = {
   details: EventDetailsResponse;
   onSearchNearby: (radiusKm: number) => void;
   onShowOnMap: (target: MapFocusTarget) => void;
+  /** Hands the event to the assistant as the selected map point. */
+  onAsk?: () => void;
   headingRef?: RefObject<HTMLHeadingElement | null>;
 };
 
@@ -29,6 +31,7 @@ export default function EventDetails({
   details,
   onSearchNearby,
   onShowOnMap,
+  onAsk,
   headingRef,
 }: EventDetailsProps) {
   const t = makeT(language);
@@ -73,9 +76,16 @@ export default function EventDetails({
         </div>
       </dl>
 
-      <button type="button" className="investigation-show-on-map" onClick={showEvent}>
-        <MapPin size={13} />{t("Показать событие на карте", "Show event on the map")}
-      </button>
+      <div className="investigation-actions">
+        <button type="button" className="investigation-show-on-map" onClick={showEvent}>
+          <MapPin size={13} />{t("Показать на карте", "Show on the map")}
+        </button>
+        {onAsk && (
+          <button type="button" className="investigation-show-on-map ask" onClick={onAsk}>
+            <MessageSquare size={13} />{t("Спросить ассистента", "Ask the assistant")}
+          </button>
+        )}
+      </div>
 
       <div className="investigation-pivot">
         <Crosshair size={13} />
@@ -129,7 +139,7 @@ type SourceProvenanceProps = {
   source: SourceView | undefined;
 };
 
-/** Where the event came from: source, license, attribution, last import, and the source's own page. */
+/** Where the event came from: source, license, attribution, when the data was updated, and the source's own page. Import runs and failures are on the data page. */
 function SourceProvenance({ language, details, source }: SourceProvenanceProps) {
   const t = makeT(language);
   const { event, lastSync } = details;
@@ -137,16 +147,13 @@ function SourceProvenance({ language, details, source }: SourceProvenanceProps) 
   const lastSucceeded = lastSync?.lastSucceededAt
     ? formatUtc(lastSync.lastSucceededAt)
     : t("нет успешных", "none succeeded");
-  const lastRunFailed = lastSync?.status === "failed"
-    ? ` · ${t("последний запуск с ошибкой", "last run failed")} (${lastSync.errorCode ?? "error"})`
-    : "";
 
   return (
     <>
       {source ? <>{source.label} · {sourceDescription(source, language)}</> : event.sourceId}
       {source?.attribution && <small>{source.attribution}</small>}
       {lastSync && (
-        <small>{t("Последняя синхронизация", "Last sync")}: {lastSucceeded}{lastRunFailed}</small>
+        <small>{t("Данные обновлены", "Data updated")}: {lastSucceeded}</small>
       )}
       {sourceUrl && (
         <a href={sourceUrl} target="_blank" rel="noreferrer noopener">

@@ -265,6 +265,413 @@ paths:
                   - type: object
                     properties:
                       retryAfterSeconds: { type: integer, minimum: 1 }
+  /api/v1/investigations/imports:
+    get:
+      operationId: listImportJobs
+      summary: Import jobs of a workspace, newest first (demo)
+      description: Lets the import dock reattach to running jobs after a page reload. Progress also arrives as `import.progress` over the assistant WebSocket.
+      parameters:
+        - { name: active, in: query, required: false, schema: { type: string, enum: ['true', 'false'] } }
+        - { name: limit, in: query, required: false, schema: { type: integer, minimum: 1, maximum: 50, default: 10 } }
+        - { name: workspaceId, in: query, required: false, schema: { type: string, pattern: '^[\w.-]{1,120}$', default: demo } }
+      responses:
+        '200':
+          description: Up to `limit` jobs.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [importEnabled, jobs, cooldowns]
+                properties:
+                  importEnabled: { type: boolean, description: Whether POST /imports is enabled (INVESTIGATION_IMPORT_ENABLED). }
+                  cooldowns: { type: object, additionalProperties: { type: integer, minimum: 0 }, description: Seconds until each event source may be imported again; 0 when it may run now. }
+                  osmAreaMaxSquareDegrees: { type: number, description: Largest area an OSM area import may cover. }
+                  jobs: { type: array, items: { $ref: '#/components/schemas/ImportJob' } }
+        '400': { description: Invalid workspace ID., content: { application/json: { schema: { $ref: '#/components/schemas/ErrorResponse' } } } }
+    post:
+      operationId: startImportJob
+      summary: Start an import job (demo, disabled by default)
+      description: >-
+        Available only when INVESTIGATION_IMPORT_ENABLED=true; the demo has no authentication. A job imports either
+        allowlisted event sources over a period (`kind: events`, the default) or OpenStreetMap places of an area from
+        the Overpass API (`kind: osm_area`). Sources run one after another in the API process and each records its own
+        audit row in source_sync_runs. Event sources keep their cooldown (a source in cooldown fails with
+        import_cooldown and retryAfterSeconds). An area is fetched in 0.25-degree tiles with a pause between requests,
+        written in one transaction, and stored as its own dataset `osm-area-<name>`; places another dataset already
+        holds keep their dataset. Only one area import runs at a time, and at most three jobs per workspace.
+        A job of `kind: dataset_delete` deletes a dataset imported from the app (`osm-area-*` or `osm-region-*`; built-in
+        datasets are refused with dataset_not_deletable): its places are deleted in batches in one transaction, so a
+        cancel rolls it back; events keep their rows with the place reference cleared, and the dataset row stays,
+        marked unavailable, for the sync history. No two running jobs may target the same dataset (dataset_busy).
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              oneOf:
+                - type: object
+                  additionalProperties: false
+                  required: [sourceIds]
+                  properties:
+                    kind: { const: events }
+                    sourceIds: { type: array, minItems: 1, uniqueItems: true, items: { type: string, enum: [ingv-fdsn, demo-seismic-synthetic] } }
+                    days: { type: integer, minimum: 1, maximum: 30, default: 7 }
+                    workspaceId: { type: string, pattern: '^[\w.-]{1,120}$', default: demo }
+                - type: object
+                  additionalProperties: false
+                  required: [kind, datasetId]
+                  description: Deletes an imported dataset; its label comes from the database.
+                  properties:
+                    kind: { const: dataset_delete }
+                    datasetId: { type: string, pattern: '^[a-z0-9-]{1,120}$' }
+                    workspaceId: { type: string, pattern: '^[\w.-]{1,120}$', default: demo }
+                - type: object
+                  additionalProperties: false
+                  required: [kind, regionId]
+                  description: A whole Geofabrik region; its name, country, and file come from the catalogue.
+                  properties:
+                    kind: { const: osm_region }
+                    regionId: { type: string, pattern: '^[a-z0-9-]{1,80}$' }
+                    workspaceId: { type: string, pattern: '^[\w.-]{1,120}$', default: demo }
+                - type: object
+                  additionalProperties: false
+                  required: [kind, label, bbox, categories]
+                  properties:
+                    kind: { const: osm_area }
+                    label: { type: string, minLength: 1, maxLength: 120, description: Name of the area; it names the dataset. }
+                    bbox: { type: array, minItems: 4, maxItems: 4, items: { type: number }, description: 'minLon, minLat, maxLon, maxLat; at most OSM_AREA_MAX_SQUARE_DEGREES (default 1).' }
+                    countryCode: { type: [string, 'null'], pattern: '^[A-Z]{2}$' }
+                    categories: { type: array, minItems: 1, items: { $ref: '#/components/schemas/OsmAreaCategory' } }
+                    workspaceId: { type: string, pattern: '^[\w.-]{1,120}$', default: demo }
+      responses:
+        '202':
+          description: Job started.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [job]
+                properties:
+                  job: { $ref: '#/components/schemas/ImportJob' }
+        '400': { description: Invalid request body (invalid_import_request), an area larger than allowed (area_too_large), or a region that is not in the catalogue (unknown_region)., content: { application/json: { schema: { $ref: '#/components/schemas/ErrorResponse' } } } }
+        '403': { description: Imports are disabled (import_disabled), or the dataset is built in (dataset_not_deletable)., content: { application/json: { schema: { $ref: '#/components/schemas/ErrorResponse' } } } }
+        '404': { description: The dataset to delete does not exist or is already deleted., content: { application/json: { schema: { $ref: '#/components/schemas/ErrorResponse' } } } }
+        '409': { description: An area or region import is already running (import_kind_busy), or a running job targets the same dataset (dataset_busy)., content: { application/json: { schema: { $ref: '#/components/schemas/ErrorResponse' } } } }
+        '415': { description: The body is not application/json., content: { application/json: { schema: { $ref: '#/components/schemas/ErrorResponse' } } } }
+        '429': { description: Too many running jobs in the workspace (too_many_import_jobs) or rate limit., content: { application/json: { schema: { $ref: '#/components/schemas/ErrorResponse' } } } }
+  /api/v1/investigations/imports/{id}:
+    get:
+      operationId: getImportJob
+      summary: One import job
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string, format: uuid } }
+        - { name: workspaceId, in: query, required: false, schema: { type: string, pattern: '^[\w.-]{1,120}$', default: demo } }
+      responses:
+        '200':
+          description: The job.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [job]
+                properties:
+                  job: { $ref: '#/components/schemas/ImportJob' }
+        '404': { description: Unknown job or another workspace., content: { application/json: { schema: { $ref: '#/components/schemas/ErrorResponse' } } } }
+  /api/v1/investigations/imports/history/clear:
+    post:
+      operationId: clearImportHistory
+      summary: Remove the workspace's finished jobs from the history (demo, disabled by default)
+      description: Only the job history; imported data and the per-source audit rows in source_sync_runs stay. Running jobs are kept.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              properties:
+                workspaceId: { type: string, pattern: '^[\w.-]{1,120}$', default: demo }
+      responses:
+        '200':
+          description: How many jobs were removed.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [removed]
+                properties:
+                  removed: { type: integer, minimum: 0 }
+        '400': { description: Invalid workspace ID., content: { application/json: { schema: { $ref: '#/components/schemas/ErrorResponse' } } } }
+        '403': { description: Imports are disabled., content: { application/json: { schema: { $ref: '#/components/schemas/ErrorResponse' } } } }
+  /api/v1/investigations/imports/{id}/cancel:
+    post:
+      operationId: cancelImportJob
+      summary: Cancel a running import job (demo, disabled by default)
+      description: Cancellation takes effect between fetch windows (one day); data already fetched is not written.
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string, format: uuid } }
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              properties:
+                workspaceId: { type: string, pattern: '^[\w.-]{1,120}$', default: demo }
+      responses:
+        '200':
+          description: Whether a running job was cancelled; false when it already finished.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [cancelled]
+                properties:
+                  cancelled: { type: boolean }
+        '403': { description: Imports are disabled., content: { application/json: { schema: { $ref: '#/components/schemas/ErrorResponse' } } } }
+        '404': { description: Unknown job or another workspace., content: { application/json: { schema: { $ref: '#/components/schemas/ErrorResponse' } } } }
+  /api/v1/data/datasets:
+    get:
+      operationId: listDatasets
+      summary: Datasets with what they hold
+      description: Every ready source with its place and event counts, countries, place extent, snapshot date, last successful import, and whether it can be deleted. Cached for a minute; `fresh=true` recomputes.
+      parameters:
+        - { name: fresh, in: query, required: false, schema: { type: string, enum: ['true'] } }
+      responses:
+        '200':
+          description: The datasets.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [datasets]
+                properties:
+                  datasets: { type: array, items: { $ref: '#/components/schemas/Dataset' } }
+  /api/v1/data/catalog/places:
+    get:
+      operationId: listCatalogPlaces
+      summary: Places of a dataset or a country, page by page (data explorer)
+      description: >-
+        A dataset or a country is required; without a dataset, the country's datasets are read. Names that start with
+        a letter come first, then by name and ID, with an opaque keyset cursor; the total is counted only for the first
+        page. The search matches the name or street (an escaped LIKE); city and category are exact; bbox limits the map
+        area. Each place carries the tags its card shows (opening hours, website, Wikidata, …).
+      parameters:
+        - { name: dataset, in: query, required: false, schema: { type: string, pattern: '^[a-z0-9-]{1,120}$' } }
+        - { name: country, in: query, required: false, schema: { type: string, pattern: '^[A-Z]{2}$' } }
+        - { name: city, in: query, required: false, schema: { type: string, maxLength: 160 } }
+        - { name: category, in: query, required: false, schema: { type: string, maxLength: 120 } }
+        - { name: q, in: query, required: false, schema: { type: string, maxLength: 80 } }
+        - { name: bbox, in: query, required: false, description: 'minLon,minLat,maxLon,maxLat', schema: { type: string, maxLength: 100 } }
+        - { name: limit, in: query, required: false, schema: { type: integer, minimum: 1, maximum: 100, default: 50 } }
+        - { name: cursor, in: query, required: false, schema: { type: string, maxLength: 600 } }
+      responses:
+        '200':
+          description: One page.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [total, places, nextCursor]
+                properties:
+                  total: { type: [integer, 'null'], minimum: 0, description: Null on later pages. }
+                  nextCursor: { type: [string, 'null'] }
+                  places:
+                    type: array
+                    items:
+                      type: object
+                      required: [id, datasetId, name, category, countryCode, city, street, houseNumber, postcode, lat, lon, details]
+                      properties:
+                        id: { type: string }
+                        datasetId: { type: string }
+                        name: { type: string }
+                        category: { type: [string, 'null'] }
+                        countryCode: { type: [string, 'null'] }
+                        city: { type: [string, 'null'] }
+                        street: { type: [string, 'null'] }
+                        houseNumber: { type: [string, 'null'] }
+                        postcode: { type: [string, 'null'] }
+                        lat: { type: number }
+                        lon: { type: number }
+                        details: { type: object, additionalProperties: { type: string } }
+        '400': { description: 'Invalid query or cursor, or neither a dataset nor a country (dataset_or_country_required).', content: { application/json: { schema: { $ref: '#/components/schemas/ErrorResponse' } } } }
+  /api/v1/data/catalog/categories:
+    get:
+      operationId: listCatalogCategories
+      summary: Place counts per category under the explorer's other filters
+      parameters:
+        - { name: dataset, in: query, required: false, schema: { type: string, pattern: '^[a-z0-9-]{1,120}$' } }
+        - { name: country, in: query, required: false, schema: { type: string, pattern: '^[A-Z]{2}$' } }
+        - { name: city, in: query, required: false, schema: { type: string, maxLength: 160 } }
+        - { name: q, in: query, required: false, schema: { type: string, maxLength: 80 } }
+        - { name: bbox, in: query, required: false, schema: { type: string, maxLength: 100 } }
+      responses:
+        '200':
+          description: Up to 80 categories, most places first.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [categories]
+                properties:
+                  categories:
+                    type: array
+                    items:
+                      type: object
+                      required: [category, places]
+                      properties:
+                        category: { type: string }
+                        places: { type: integer, minimum: 0 }
+        '400': { description: Invalid query, or neither a dataset nor a country., content: { application/json: { schema: { $ref: '#/components/schemas/ErrorResponse' } } } }
+  /api/v1/data/datasets/{id}/events:
+    get:
+      operationId: listDatasetEvents
+      summary: The events of one dataset, newest first, page by page
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string, pattern: '^[a-z0-9-]{1,120}$' } }
+        - { name: limit, in: query, required: false, schema: { type: integer, minimum: 1, maximum: 100, default: 50 } }
+        - { name: cursor, in: query, required: false, schema: { type: string, maxLength: 600 } }
+      responses:
+        '200':
+          description: One page.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [total, events, nextCursor]
+                properties:
+                  total: { type: [integer, 'null'], minimum: 0, description: Null on later pages. }
+                  nextCursor: { type: [string, 'null'] }
+                  events:
+                    type: array
+                    items:
+                      type: object
+                      required: [id, label, category, observedAt, lat, lon, magnitude]
+                      properties:
+                        id: { type: string }
+                        label: { type: string }
+                        category: { type: string }
+                        observedAt: { type: string, format: date-time }
+                        lat: { type: number }
+                        lon: { type: number }
+                        magnitude: { type: [number, 'null'] }
+        '400': { description: Invalid query or cursor., content: { application/json: { schema: { $ref: '#/components/schemas/ErrorResponse' } } } }
+  /api/v1/data/countries:
+    get:
+      operationId: listCountries
+      summary: Countries with imported places
+      description: Per country, the number of places, cities, towns, and villages, and the datasets that hold them (most places first). With `dataset`, the counts are that dataset's own. All countries are cached for a minute; `fresh=true` recomputes.
+      parameters:
+        - { name: fresh, in: query, required: false, schema: { type: string, enum: ['true'] } }
+        - { name: dataset, in: query, required: false, schema: { type: string, pattern: '^[a-z0-9-]{1,120}$' } }
+      responses:
+        '200':
+          description: The countries, most places first.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [countries]
+                properties:
+                  countries: { type: array, items: { $ref: '#/components/schemas/CountryCoverage' } }
+  /api/v1/data/settlements:
+    get:
+      operationId: listSettlements
+      summary: Cities, towns, and villages of one country
+      description: Cities first, then towns and villages, each ordered by how many places name the settlement in their address. The search matches the local or English name.
+      parameters:
+        - { name: country, in: query, required: true, schema: { type: string, pattern: '^[A-Z]{2}$' } }
+        - { name: dataset, in: query, required: false, schema: { type: string, pattern: '^[a-z0-9-]{1,120}$' } }
+        - { name: q, in: query, required: false, schema: { type: string, maxLength: 80 } }
+        - { name: types, in: query, required: false, description: Comma-separated., schema: { type: string, default: 'city,town,village' } }
+        - { name: limit, in: query, required: false, schema: { type: integer, minimum: 1, maximum: 200, default: 50 } }
+        - { name: offset, in: query, required: false, schema: { type: integer, minimum: 0, maximum: 100000, default: 0 } }
+      responses:
+        '200':
+          description: One page of settlements and the total.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [total, settlements]
+                properties:
+                  total: { type: integer, minimum: 0 }
+                  settlements: { type: array, items: { $ref: '#/components/schemas/Settlement' } }
+        '400': { description: Invalid query., content: { application/json: { schema: { $ref: '#/components/schemas/ErrorResponse' } } } }
+  /api/v1/data/regions:
+    get:
+      operationId: searchGeofabrikRegions
+      summary: Browse or search the Geofabrik catalogue for a region to import whole
+      description: >-
+        Without `q`, the regions directly inside `parent` (Europe's countries without a parent). With `q`, regions whose
+        catalogue name, ID, or parent path matches, and countries by their name in about 25 languages ("Polska",
+        "Польша"). When nothing matches, the place is looked up in Nominatim (one request per second, shared with
+        `/data/geocode`) and the regions that contain it are returned, by ISO 3166 code, then by its local names within
+        its country, then its country; `via` names the place.
+      parameters:
+        - { name: q, in: query, required: false, schema: { type: string, minLength: 2, maxLength: 80 } }
+        - { name: parent, in: query, required: false, schema: { type: string, pattern: '^[a-z0-9-]{1,80}$' } }
+        - { name: language, in: query, required: false, schema: { type: string, enum: [en, ru, de], default: en } }
+      responses:
+        '200':
+          description: Up to 12 regions for a search, or all children for browsing.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [regions]
+                properties:
+                  regions: { type: array, items: { $ref: '#/components/schemas/GeofabrikRegion' } }
+                  via: { type: string, description: The place a search found when the catalogue did not name it; the regions contain it. }
+        '400': { description: Invalid query, or both q and parent., content: { application/json: { schema: { $ref: '#/components/schemas/ErrorResponse' } } } }
+        '429': { description: Too many place lookups (rate_limited)., content: { application/json: { schema: { $ref: '#/components/schemas/ErrorResponse' } } } }
+        '502': { description: The catalogue is unavailable., content: { application/json: { schema: { $ref: '#/components/schemas/ErrorResponse' } } } }
+  /api/v1/data/regions/{id}:
+    get:
+      operationId: getGeofabrikRegion
+      summary: A region with the size and date of its file
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string, pattern: '^[a-z0-9-]{1,80}$' } }
+      responses:
+        '200':
+          description: The region and its file.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [region, file]
+                properties:
+                  region: { $ref: '#/components/schemas/GeofabrikRegion' }
+                  file:
+                    type: object
+                    required: [url, bytes, lastModified]
+                    properties:
+                      url: { type: string }
+                      bytes: { type: [integer, 'null'] }
+                      lastModified: { type: [string, 'null'], format: date-time }
+        '404': { description: Not in the catalogue., content: { application/json: { schema: { $ref: '#/components/schemas/ErrorResponse' } } } }
+  /api/v1/data/geocode:
+    get:
+      operationId: geocodePlace
+      summary: Find a settlement by name to choose an import area
+      description: Proxies the OpenStreetMap Nominatim search (allowlisted host, at most one request per second, results cached for an hour).
+      parameters:
+        - { name: q, in: query, required: true, schema: { type: string, minLength: 2, maxLength: 100 } }
+        - { name: language, in: query, required: false, schema: { type: string, enum: [en, ru, de], default: en } }
+      responses:
+        '200':
+          description: Up to six settlements.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [results]
+                properties:
+                  results: { type: array, items: { $ref: '#/components/schemas/GeocodeResult' } }
+        '400': { description: Invalid query., content: { application/json: { schema: { $ref: '#/components/schemas/ErrorResponse' } } } }
+        '429': { description: More than one search per second; see Retry-After., content: { application/json: { schema: { $ref: '#/components/schemas/ErrorResponse' } } } }
+        '502': { description: Nominatim did not answer usably., content: { application/json: { schema: { $ref: '#/components/schemas/ErrorResponse' } } } }
   /api/v1/investigations/query:
     post:
       operationId: queryInvestigationEvents
@@ -420,6 +827,134 @@ components:
                   - { type: number, minimum: -90, maximum: 90 }
                 minItems: 2
                 maxItems: 2
+    OsmAreaCategory:
+      type: string
+      enum: [attraction, museum, gallery, viewpoint, monument, castle, church, theatre, park, restaurant, cafe, bar, hotel, transport]
+    Dataset:
+      type: object
+      required: [id, label, kind, mode, license, attribution, sourceUrl, snapshotDate, places, events, bbox, countries, lastImportAt, deletable]
+      properties:
+        id: { type: string }
+        label: { type: string }
+        kind: { type: string, enum: [places, events] }
+        mode: { type: string }
+        license: { type: [string, 'null'] }
+        attribution: { type: [string, 'null'] }
+        sourceUrl: { type: [string, 'null'] }
+        snapshotDate: { type: [string, 'null'], format: date }
+        places: { type: integer, minimum: 0 }
+        events: { type: integer, minimum: 0 }
+        bbox: { type: [array, 'null'], minItems: 4, maxItems: 4, items: { type: number }, description: Extent of the places. }
+        countries: { type: array, items: { type: string }, description: Country codes of the places, most places first. }
+        lastImportAt: { type: [string, 'null'], format: date-time }
+        deletable: { type: boolean, description: Only datasets imported from the app can be deleted. }
+    CountryCoverage:
+      type: object
+      required: [countryCode, places, cities, towns, villages, datasets]
+      properties:
+        countryCode: { type: string }
+        places: { type: integer, minimum: 0 }
+        cities: { type: integer, minimum: 0 }
+        towns: { type: integer, minimum: 0 }
+        villages: { type: integer, minimum: 0 }
+        datasets: { type: array, items: { type: string } }
+    Settlement:
+      type: object
+      required: [id, name, nameEn, type, countryCode, datasetId, lat, lon, places]
+      properties:
+        id: { type: string }
+        name: { type: string }
+        nameEn: { type: [string, 'null'], description: English name when it differs. }
+        type: { type: string, enum: [city, town, village] }
+        countryCode: { type: [string, 'null'] }
+        datasetId: { type: string }
+        lat: { type: number }
+        lon: { type: number }
+        places: { type: integer, minimum: 0, description: Places whose address names this settlement. }
+    GeofabrikRegion:
+      type: object
+      required: [id, name, path, countryCode, pbfUrl, parentId, hasChildren, isoCodes]
+      properties:
+        id: { type: string }
+        name: { type: string }
+        path: { type: array, items: { type: string }, description: Parent regions, outermost first. }
+        countryCode: { type: [string, 'null'] }
+        pbfUrl: { type: string }
+        parentId: { type: [string, 'null'] }
+        hasChildren: { type: boolean }
+        isoCodes: { type: array, items: { type: string }, description: ISO 3166 codes the catalogue gives the region itself. }
+    GeocodeResult:
+      type: object
+      required: [label, name, localizedName, type, countryCode, lat, lon, bbox]
+      properties:
+        label: { type: string }
+        name: { type: string, description: Local name as stored in OpenStreetMap; names the dataset. }
+        localizedName: { type: string, description: Name in the requested language. }
+        type: { type: string }
+        countryCode: { type: [string, 'null'] }
+        lat: { type: number }
+        lon: { type: number }
+        bbox: { type: array, minItems: 4, maxItems: 4, items: { type: number }, description: 'minLon, minLat, maxLon, maxLat' }
+    ImportJobSource:
+      type: object
+      required: [sourceId, label, status, progress, phase, windowStart, stepsDone, stepsTotal, fetched, inserted, updated, linkedPlaces, runId, errorCode, retryAfterSeconds]
+      properties:
+        sourceId: { type: string }
+        label: { type: string }
+        status: { type: string, enum: [pending, running, succeeded, failed, cancelled] }
+        progress: { type: number, minimum: 0, maximum: 1 }
+        phase: { type: [string, 'null'], enum: [fetching, saving, linking, done, null] }
+        windowStart: { type: [string, 'null'], format: date-time, description: Start of the day being fetched. }
+        stepsDone: { type: integer, minimum: 0, description: Fetch steps done (days for events, map tiles for an area). }
+        stepsTotal: { type: integer, minimum: 0 }
+        fetched: { type: integer, minimum: 0 }
+        inserted: { type: integer, minimum: 0 }
+        updated: { type: integer, minimum: 0 }
+        linkedPlaces: { type: integer, minimum: 0 }
+        runId: { type: [string, 'null'], description: The source's audit row in source_sync_runs; null for a deletion. }
+        errorCode: { type: [string, 'null'] }
+        retryAfterSeconds: { type: [integer, 'null'] }
+    ImportJob:
+      type: object
+      required: [id, workspaceId, status, params, progress, sources, createdAt, updatedAt, finishedAt]
+      properties:
+        id: { type: string, format: uuid }
+        workspaceId: { type: string }
+        status: { type: string, enum: [running, succeeded, partial, failed, cancelled] }
+        params:
+          oneOf:
+            - type: object
+              required: [kind, sourceIds, days]
+              properties:
+                kind: { const: events }
+                sourceIds: { type: array, items: { type: string } }
+                days: { type: integer, minimum: 1, maximum: 30 }
+            - type: object
+              required: [kind, datasetId, label]
+              properties:
+                kind: { const: dataset_delete }
+                datasetId: { type: string }
+                label: { type: string }
+            - type: object
+              required: [kind, regionId, label, countryCode]
+              properties:
+                kind: { const: osm_region }
+                regionId: { type: string }
+                label: { type: string }
+                countryCode: { type: [string, 'null'] }
+            - type: object
+              required: [kind, label, bbox, countryCode, categories]
+              properties:
+                kind: { const: osm_area }
+                label: { type: string }
+                bbox: { type: array, minItems: 4, maxItems: 4, items: { type: number } }
+                countryCode: { type: [string, 'null'] }
+                categories: { type: array, items: { $ref: '#/components/schemas/OsmAreaCategory' } }
+        progress: { type: number, minimum: 0, maximum: 1, description: Mean of the sources' progress. }
+        sources: { type: array, items: { $ref: '#/components/schemas/ImportJobSource' } }
+        createdAt: { type: string, format: date-time }
+        updatedAt: { type: string, format: date-time }
+        finishedAt: { type: [string, 'null'], format: date-time }
     ErrorResponse:
       type: object
       required: [error]
@@ -487,6 +1022,13 @@ components:
       required: [total, events, nextCursor, appliedFilters, mapFeatures, sources]
       properties:
         total: { type: integer, minimum: 0, description: Matches for the filters across all pages. }
+        magnitudeRange:
+          type: [object, 'null']
+          description: Smallest and largest magnitude over every match, not only this page; null when no match has one.
+          required: [min, max]
+          properties:
+            min: { type: number }
+            max: { type: number }
         events:
           type: array
           items: { $ref: '#/components/schemas/InvestigationEvent' }

@@ -40,6 +40,8 @@ before(async () => {
     database: (await import("../src/database/client.ts")).database,
     conversations: await import("../src/data/conversation.repository.ts"),
     places: await import("../src/data/record.repository.ts"),
+    importJobs: (await import("../src/data/import-job.repository.ts")).sqlImportJobStore,
+    datasets: await import("../src/data/dataset.repository.ts"),
   };
   await resetData();
 });
@@ -271,4 +273,95 @@ test("keeps the trip plan of a conversation across turns until it is replaced or
   await conversations.saveConversationTurn(id, "test-workspace", [{ role: "user", content: "New plan" }, { role: "assistant", content: "Which country?" }], null);
   assert.equal(await conversations.getConversationTripPlan(id, "test-workspace"), null);
   await sql("DELETE FROM assistant_conversations WHERE workspace_id = 'test-workspace'");
+});
+
+test("stores import jobs per workspace and fails the ones left running by a stopped server", { skip }, async () => {
+  const { importJobs } = modules;
+  await sql("DELETE FROM import_jobs WHERE workspace_id LIKE 'test-%'");
+  const source = (sourceId, status) => ({ sourceId, label: sourceId, status, progress: 0.5, phase: "fetching", windowStart: null, fetched: 3, inserted: 0, updated: 0, linkedPlaces: 0, runId: null, errorCode: null, retryAfterSeconds: null });
+  const job = {
+    id: "8b0e7c1e-5f0a-4a51-9a51-0c6a39a5e010", workspaceId: "test-a", status: "running", params: { sourceIds: ["a", "b"], days: 3 }, progress: 0.25,
+    sources: [source("a", "succeeded"), source("b", "running")], createdAt: "2026-10-15T10:00:00.000Z", updatedAt: "2026-10-15T10:00:01.000Z", finishedAt: null,
+  };
+  await importJobs.save(job);
+  await importJobs.save({ ...job, progress: 0.5, updatedAt: "2026-10-15T10:00:02.000Z" });
+  assert.equal((await importJobs.get(job.id, "test-a")).progress, 0.5);
+  assert.equal(await importJobs.get(job.id, "test-b"), null);
+  assert.deepEqual((await importJobs.list("test-a", { active: true, limit: 10 })).map((item) => item.id), [job.id]);
+  assert.ok(await importJobs.failInterrupted() >= 1);
+  const failed = await importJobs.get(job.id, "test-a");
+  assert.equal(failed.status, "failed");
+  assert.deepEqual(failed.sources.map((item) => [item.status, item.errorCode]), [["succeeded", null], ["failed", "import_interrupted"]]);
+  assert.deepEqual(await importJobs.list("test-a", { active: true, limit: 10 }), []);
+  await sql("DELETE FROM import_jobs WHERE workspace_id LIKE 'test-%'");
+});
+
+test("lists countries and settlements, and deletes an imported dataset in one transaction", { skip }, async () => {
+  const { datasets } = modules;
+  const AREA = "osm-area-testville";
+  await sql("INSERT INTO data_sources (id, label, mode, status) VALUES ($1, 'OpenStreetMap: Testville (Overpass)', 'public_snapshot', 'ready')", [AREA]);
+  const rows = [
+    ["a-city", "Testville", "place:city", null], ["a-town", "Smalltown", "place:town", null],
+    ["a-1", "Synthetic Museum", "tourism:museum", "Testville"], ["a-2", "Synthetic Park", "leisure:park", "Testville"], ["a-3", "Synthetic Cafe", "amenity:cafe", "Smalltown"],
+  ];
+  for (const [id, name, category, city] of rows) {
+    await sql(`INSERT INTO places (id, source_id, osm_type, osm_id, name, category, country_code, city, lat, lon, tags, import_token)
+       VALUES ($1, $2, 'node', $1, $3, $4, 'XT', $5, 10, 10, '{}'::jsonb, 'test')`, [id, AREA, name, category, city]);
+  }
+  const event = (await sql("SELECT id FROM records LIMIT 1"))[0];
+  if (event) await sql("UPDATE records SET place_id = 'a-1' WHERE id = $1", [event.id]);
+
+  const country = (await datasets.listCountries()).find((item) => item.countryCode === "XT");
+  assert.deepEqual(country, { countryCode: "XT", places: 5, cities: 1, towns: 1, villages: 0, datasets: [AREA] });
+  const listed = await datasets.listSettlements({ countryCode: "XT", types: ["city", "town", "village"], limit: 10, offset: 0 });
+  assert.equal(listed.total, 2);
+  assert.deepEqual(listed.settlements.map((item) => [item.name, item.type, item.places]), [["Testville", "city", 2], ["Smalltown", "town", 1]]);
+  // The search is a bound LIKE pattern; wildcards in the query match literally.
+  assert.deepEqual((await datasets.listSettlements({ countryCode: "XT", query: "small", types: ["town"], limit: 10, offset: 0 })).settlements.map((item) => item.name), ["Smalltown"]);
+  assert.equal((await datasets.listSettlements({ countryCode: "XT", query: "%", types: ["city", "town"], limit: 10, offset: 0 })).total, 0);
+  const view = (await datasets.listDatasets()).find((item) => item.id === AREA);
+  assert.deepEqual([view.places, view.countries, view.deletable], [5, ["XT"], true]);
+
+  // Places page by name with a keyset cursor; search, category, city, and area are bound filters.
+  const scope = { datasetIds: [AREA] };
+  const first = await datasets.listCatalogPlaces({ ...scope, limit: 3 });
+  assert.equal(first.total, 5);
+  const second = await datasets.listCatalogPlaces({ ...scope, limit: 3, after: first.next });
+  assert.equal(second.total, null);
+  assert.equal(second.next, null);
+  assert.deepEqual([...first.places, ...second.places].map((place) => place.name), ["Smalltown", "Synthetic Cafe", "Synthetic Museum", "Synthetic Park", "Testville"]);
+  // Names that do not start with a letter come after the others, across pages.
+  await sql(`INSERT INTO places (id, source_id, osm_type, osm_id, name, category, country_code, lat, lon, tags, import_token)
+     VALUES ('a-num', $1, 'node', 'a-num', '#00012 Station', 'amenity:bicycle_rental', 'XT', 10, 10, '{}'::jsonb, 'test')`, [AREA]);
+  const pages = [];
+  let after;
+  do {
+    const page = await datasets.listCatalogPlaces({ ...scope, limit: 2, after });
+    pages.push(...page.places.map((place) => place.name));
+    after = page.next ?? undefined;
+  } while (after);
+  assert.deepEqual(pages, ["Smalltown", "Synthetic Cafe", "Synthetic Museum", "Synthetic Park", "Testville", "#00012 Station"]);
+  await sql("DELETE FROM places WHERE id = 'a-num'");
+  assert.deepEqual((await datasets.listCatalogPlaces({ ...scope, limit: 10, query: "MUSE" })).places.map((place) => place.id), ["a-1"]);
+  assert.equal((await datasets.listCatalogPlaces({ ...scope, limit: 10, query: "_" })).total, 0);
+  assert.deepEqual((await datasets.listCatalogPlaces({ ...scope, limit: 10, city: "smalltown" })).places.map((place) => place.id), ["a-3"]);
+  assert.equal((await datasets.listCatalogPlaces({ ...scope, countryCode: "XT", limit: 10, bbox: [9, 9, 11, 11] })).total, 5);
+  assert.equal((await datasets.listCatalogPlaces({ ...scope, limit: 10, bbox: [20, 20, 21, 21] })).total, 0);
+  assert.equal((await datasets.listCatalogPlaces({ datasetIds: [PLACE_SOURCE_ID], countryCode: "XT", limit: 10 })).total, 0);
+  // Categories ignore the category filter itself, so the menu keeps its other choices.
+  assert.deepEqual((await datasets.listCatalogCategories({ ...scope, category: "leisure:park" })).slice(0, 1), [{ category: "amenity:cafe", places: 1 }]);
+  assert.deepEqual((await datasets.listCountries(AREA)).map((item) => [item.countryCode, item.places]), [["XT", 5]]);
+
+  // A failing batch rolls everything back.
+  await assert.rejects(datasets.sqlDatasetDeleteStore.deleteDataset(AREA, () => { throw new Error("import_cancelled"); }));
+  assert.equal(await datasets.sqlDatasetDeleteStore.countPlaces(AREA), 5);
+  assert.equal(await datasets.sqlDatasetDeleteStore.deleteDataset(AREA, () => {}), 5);
+  assert.equal(await datasets.sqlDatasetDeleteStore.countPlaces(AREA), 0);
+  // Events stay, without the place; the dataset row stays for the history but is no longer listed.
+  if (event) assert.equal((await sql("SELECT place_id FROM records WHERE id = $1", [event.id]))[0].place_id, null);
+  assert.equal((await sql("SELECT status FROM data_sources WHERE id = $1", [AREA]))[0].status, "unavailable");
+  assert.equal((await datasets.listDatasets()).some((item) => item.id === AREA), false);
+  assert.equal((await datasets.listCountries()).some((item) => item.countryCode === "XT"), false);
+  assert.ok((await sql("SELECT count(*)::int AS n FROM places WHERE source_id = $1", [PLACE_SOURCE_ID]))[0].n > 0);
+  await sql("DELETE FROM data_sources WHERE id = $1", [AREA]);
 });

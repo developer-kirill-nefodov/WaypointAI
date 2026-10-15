@@ -2,8 +2,6 @@ import type {
   AppliedEventFilters,
   EventDetailsResponse,
   EventSearchResponse,
-  InvestigationQueryRequest,
-  InvestigationQueryResponse,
   QueryInterpretation,
 } from "@waypoint-ai/shared";
 import { apiBase } from "./client";
@@ -56,17 +54,6 @@ export async function searchEvents(params: URLSearchParams, signal?: AbortSignal
 
 export async function loadEventDetails(id: string, signal?: AbortSignal): Promise<EventDetailsResponse> {
   return getJson(`/api/v1/investigations/events/${encodeURIComponent(id)}`, signal);
-}
-
-export async function runInvestigationQuery(
-  request: InvestigationQueryRequest,
-  signal?: AbortSignal,
-): Promise<InvestigationQueryResponse> {
-  return getJson("/api/v1/investigations/query", signal, {
-    method: "POST",
-    headers: { "content-type": "application/json" },
-    body: JSON.stringify(request),
-  });
 }
 
 /** Rebuilds GET parameters from the filters the server applied, so "Show more" continues the same search. */

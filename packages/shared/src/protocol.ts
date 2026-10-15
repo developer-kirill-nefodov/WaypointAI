@@ -24,8 +24,57 @@ export interface ClientBase {
   requestId: string;
 }
 
+export type ImportJobStatus = "running" | "succeeded" | "partial" | "failed" | "cancelled";
+export type ImportSourceStatus = "pending" | "running" | "succeeded" | "failed" | "cancelled";
+
+/** One source of an import job, as the import dock shows it. */
+export interface ImportJobSource {
+  sourceId: string;
+  label: string;
+  status: ImportSourceStatus;
+  /** 0..1 */
+  progress: number;
+  phase: "fetching" | "saving" | "linking" | "done" | null;
+  /** Start of the day being fetched (ISO), for a phase line such as "INGV · 2026-10-08". */
+  windowStart: string | null;
+  /** Fetch steps done and in total (days for events, map tiles for an OSM area). */
+  stepsDone: number;
+  stepsTotal: number;
+  fetched: number;
+  inserted: number;
+  updated: number;
+  linkedPlaces: number;
+  runId: string | null;
+  errorCode: string | null;
+  retryAfterSeconds: number | null;
+}
+
+/** Kinds of places an OpenStreetMap area import can load. */
+export type OsmAreaCategory = "attraction" | "museum" | "gallery" | "viewpoint" | "monument" | "castle" | "church" | "theatre" | "park" | "restaurant" | "cafe" | "bar" | "hotel" | "transport";
+
+/** What a job does: imports event sources over a period, OpenStreetMap places of an area or region, or deletes an imported dataset. */
+export type ImportJobParams =
+  | { kind: "events"; sourceIds: string[]; days: number }
+  | { kind: "osm_area"; label: string; bbox: [number, number, number, number]; countryCode: string | null; categories: OsmAreaCategory[] }
+  | { kind: "osm_region"; regionId: string; label: string; countryCode: string | null }
+  | { kind: "dataset_delete"; datasetId: string; label: string };
+
+/** An import started from the app. */
+export interface ImportJob {
+  id: string;
+  workspaceId: string;
+  status: ImportJobStatus;
+  params: ImportJobParams;
+  /** 0..1, the mean of the sources' progress. */
+  progress: number;
+  sources: ImportJobSource[];
+  createdAt: string;
+  updatedAt: string;
+  finishedAt: string | null;
+}
+
 export type ClientFrame =
-  | (ClientBase & { type: "session.start" })
+  | (ClientBase & { type: "session.start"; workspaceId?: string })
   | (ClientBase & { type: "turn.submit"; conversationId: string | null; message: string; scope: Scope })
   | (ClientBase & { type: "turn.cancel" })
   | (ClientBase & { type: "voice.start"; language?: Language })
@@ -115,6 +164,8 @@ export type ServerFrame =
   | (ClientBase & { type: "session.ready"; connectionId: string; assistantStatus: AssistantStatus; modelLabel: string | null; demoMode: boolean; supportedFilters: string[]; voiceInput?: boolean })
   | (ClientBase & { type: "turn.accepted"; conversationId: string })
   | (ClientBase & { type: "turn.status"; phase: "understanding" | "searching" | "composing"; label: string })
+  /** Progress of an import job of the connection's workspace; requestId is the job ID. */
+  | (ClientBase & { type: "import.progress"; job: ImportJob })
   /** One line of the progress feed: the same stepId is sent as running, then done or failed. */
   | (ClientBase & { type: "turn.step"; stepId: string; label: string; state: "running" | "done" | "failed"; detail?: string })
   | (ClientBase & { type: "tool.started"; tool: ToolName; label: string })

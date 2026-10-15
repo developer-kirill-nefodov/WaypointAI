@@ -4,6 +4,7 @@ import { z } from "zod";
 import { modelEnvironmentSchema } from "./model.js";
 import { voiceEnvironmentSchema } from "./voice.js";
 import { eventsEnvironmentSchema } from "./events.js";
+import { osmEnvironmentSchema } from "./osm.js";
 
 // Load the repository-root .env regardless of the working directory; workspace scripts run from backend/.
 // Resolves to the root from both src/config/ and dist/config/.
@@ -20,6 +21,6 @@ const envSchema = z.object({
   // Never "true": that would trust any client-supplied X-Forwarded-For and defeat per-client rate limits.
   TRUST_PROXY: z.preprocess((value) => value === undefined || value === "" || value === "false" ? false : Number(value), z.union([z.literal(false), z.number().int().min(1).max(5)])),
   DEMO_MODE: z.preprocess((value) => value === undefined ? "true" : value, z.enum(["true", "false"]).transform((value) => value === "true")),
-}).merge(modelEnvironmentSchema).merge(voiceEnvironmentSchema).merge(eventsEnvironmentSchema);
+}).merge(modelEnvironmentSchema).merge(voiceEnvironmentSchema).merge(eventsEnvironmentSchema).merge(osmEnvironmentSchema);
 
 export const env = envSchema.parse(process.env);

@@ -183,6 +183,258 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/investigations/imports": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Import jobs of a workspace, newest first (demo)
+         * @description Lets the import dock reattach to running jobs after a page reload. Progress also arrives as `import.progress` over the assistant WebSocket.
+         */
+        get: operations["listImportJobs"];
+        put?: never;
+        /**
+         * Start an import job (demo, disabled by default)
+         * @description Available only when INVESTIGATION_IMPORT_ENABLED=true; the demo has no authentication. A job imports either allowlisted event sources over a period (`kind: events`, the default) or OpenStreetMap places of an area from the Overpass API (`kind: osm_area`). Sources run one after another in the API process and each records its own audit row in source_sync_runs. Event sources keep their cooldown (a source in cooldown fails with import_cooldown and retryAfterSeconds). An area is fetched in 0.25-degree tiles with a pause between requests, written in one transaction, and stored as its own dataset `osm-area-<name>`; places another dataset already holds keep their dataset. Only one area import runs at a time, and at most three jobs per workspace. A job of `kind: dataset_delete` deletes a dataset imported from the app (`osm-area-*` or `osm-region-*`; built-in datasets are refused with dataset_not_deletable): its places are deleted in batches in one transaction, so a cancel rolls it back; events keep their rows with the place reference cleared, and the dataset row stays, marked unavailable, for the sync history. No two running jobs may target the same dataset (dataset_busy).
+         */
+        post: operations["startImportJob"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/investigations/imports/{id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** One import job */
+        get: operations["getImportJob"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/investigations/imports/history/clear": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Remove the workspace's finished jobs from the history (demo, disabled by default)
+         * @description Only the job history; imported data and the per-source audit rows in source_sync_runs stay. Running jobs are kept.
+         */
+        post: operations["clearImportHistory"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/investigations/imports/{id}/cancel": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Cancel a running import job (demo, disabled by default)
+         * @description Cancellation takes effect between fetch windows (one day); data already fetched is not written.
+         */
+        post: operations["cancelImportJob"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/data/datasets": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Datasets with what they hold
+         * @description Every ready source with its place and event counts, countries, place extent, snapshot date, last successful import, and whether it can be deleted. Cached for a minute; `fresh=true` recomputes.
+         */
+        get: operations["listDatasets"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/data/catalog/places": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Places of a dataset or a country, page by page (data explorer)
+         * @description A dataset or a country is required; without a dataset, the country's datasets are read. Names that start with a letter come first, then by name and ID, with an opaque keyset cursor; the total is counted only for the first page. The search matches the name or street (an escaped LIKE); city and category are exact; bbox limits the map area. Each place carries the tags its card shows (opening hours, website, Wikidata, …).
+         */
+        get: operations["listCatalogPlaces"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/data/catalog/categories": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Place counts per category under the explorer's other filters */
+        get: operations["listCatalogCategories"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/data/datasets/{id}/events": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** The events of one dataset, newest first, page by page */
+        get: operations["listDatasetEvents"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/data/countries": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Countries with imported places
+         * @description Per country, the number of places, cities, towns, and villages, and the datasets that hold them (most places first). With `dataset`, the counts are that dataset's own. All countries are cached for a minute; `fresh=true` recomputes.
+         */
+        get: operations["listCountries"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/data/settlements": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Cities, towns, and villages of one country
+         * @description Cities first, then towns and villages, each ordered by how many places name the settlement in their address. The search matches the local or English name.
+         */
+        get: operations["listSettlements"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/data/regions": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Browse or search the Geofabrik catalogue for a region to import whole
+         * @description Without `q`, the regions directly inside `parent` (Europe's countries without a parent). With `q`, regions whose catalogue name, ID, or parent path matches, and countries by their name in about 25 languages ("Polska", "Польша"). When nothing matches, the place is looked up in Nominatim (one request per second, shared with `/data/geocode`) and the regions that contain it are returned, by ISO 3166 code, then by its local names within its country, then its country; `via` names the place.
+         */
+        get: operations["searchGeofabrikRegions"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/data/regions/{id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** A region with the size and date of its file */
+        get: operations["getGeofabrikRegion"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/data/geocode": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Find a settlement by name to choose an import area
+         * @description Proxies the OpenStreetMap Nominatim search (allowlisted host, at most one request per second, results cached for an hour).
+         */
+        get: operations["geocodePlace"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/investigations/query": {
         parameters: {
             query?: never;
@@ -286,6 +538,142 @@ export interface components {
                 ][];
             };
         };
+        /** @enum {string} */
+        OsmAreaCategory: "attraction" | "museum" | "gallery" | "viewpoint" | "monument" | "castle" | "church" | "theatre" | "park" | "restaurant" | "cafe" | "bar" | "hotel" | "transport";
+        Dataset: {
+            id: string;
+            label: string;
+            /** @enum {string} */
+            kind: "places" | "events";
+            mode: string;
+            license: string | null;
+            attribution: string | null;
+            sourceUrl: string | null;
+            /** Format: date */
+            snapshotDate: string | null;
+            places: number;
+            events: number;
+            /** @description Extent of the places. */
+            bbox: number[] | null;
+            /** @description Country codes of the places */
+            countries: string[];
+            /** Format: date-time */
+            lastImportAt: string | null;
+            /** @description Only datasets imported from the app can be deleted. */
+            deletable: boolean;
+        };
+        CountryCoverage: {
+            countryCode: string;
+            places: number;
+            cities: number;
+            towns: number;
+            villages: number;
+            datasets: string[];
+        };
+        Settlement: {
+            id: string;
+            name: string;
+            /** @description English name when it differs. */
+            nameEn: string | null;
+            /** @enum {string} */
+            type: "city" | "town" | "village";
+            countryCode: string | null;
+            datasetId: string;
+            lat: number;
+            lon: number;
+            /** @description Places whose address names this settlement. */
+            places: number;
+        };
+        GeofabrikRegion: {
+            id: string;
+            name: string;
+            /** @description Parent regions */
+            path: string[];
+            countryCode: string | null;
+            pbfUrl: string;
+            parentId: string | null;
+            hasChildren: boolean;
+            /** @description ISO 3166 codes the catalogue gives the region itself. */
+            isoCodes: string[];
+        };
+        GeocodeResult: {
+            label: string;
+            /** @description Local name as stored in OpenStreetMap; names the dataset. */
+            name: string;
+            /** @description Name in the requested language. */
+            localizedName: string;
+            type: string;
+            countryCode: string | null;
+            lat: number;
+            lon: number;
+            /** @description minLon, minLat, maxLon, maxLat */
+            bbox: number[];
+        };
+        ImportJobSource: {
+            sourceId: string;
+            label: string;
+            /** @enum {string} */
+            status: "pending" | "running" | "succeeded" | "failed" | "cancelled";
+            progress: number;
+            /** @enum {string|null} */
+            phase: "fetching" | "saving" | "linking" | "done" | null;
+            /**
+             * Format: date-time
+             * @description Start of the day being fetched.
+             */
+            windowStart: string | null;
+            /** @description Fetch steps done (days for events */
+            stepsDone: number;
+            stepsTotal: number;
+            fetched: number;
+            inserted: number;
+            updated: number;
+            linkedPlaces: number;
+            /** @description The source's audit row in source_sync_runs; null for a deletion. */
+            runId: string | null;
+            errorCode: string | null;
+            retryAfterSeconds: number | null;
+        };
+        ImportJob: {
+            /** Format: uuid */
+            id: string;
+            workspaceId: string;
+            /** @enum {string} */
+            status: "running" | "succeeded" | "partial" | "failed" | "cancelled";
+            params: {
+                /** @constant */
+                kind: "events";
+                sourceIds: string[];
+                days: number;
+            } | {
+                /** @constant */
+                kind: "dataset_delete";
+                datasetId: string;
+                label: string;
+            } | {
+                /** @constant */
+                kind: "osm_region";
+                regionId: string;
+                label: string;
+                countryCode: string | null;
+            } | {
+                /** @constant */
+                kind: "osm_area";
+                label: string;
+                bbox: number[];
+                countryCode: string | null;
+                categories: components["schemas"]["OsmAreaCategory"][];
+            };
+            /** @description Mean of the sources' progress. */
+            progress: number;
+            sources: components["schemas"]["ImportJobSource"][];
+            /** Format: date-time */
+            createdAt: string;
+            /** Format: date-time */
+            updatedAt: string;
+            /** Format: date-time */
+            finishedAt: string | null;
+        };
         ErrorResponse: {
             error: string;
         };
@@ -342,6 +730,11 @@ export interface components {
         EventSearchResponse: {
             /** @description Matches for the filters across all pages. */
             total: number;
+            /** @description Smallest and largest magnitude over every match, not only this page; null when no match has one. */
+            magnitudeRange?: {
+                min: number;
+                max: number;
+            } | null;
             events: components["schemas"]["InvestigationEvent"][];
             nextCursor: string | null;
             appliedFilters: components["schemas"]["AppliedEventFilters"];
@@ -854,6 +1247,673 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorResponse"] & {
                         retryAfterSeconds?: number;
                     };
+                };
+            };
+        };
+    };
+    listImportJobs: {
+        parameters: {
+            query?: {
+                active?: "true" | "false";
+                limit?: number;
+                workspaceId?: string;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Up to `limit` jobs. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        /** @description Whether POST /imports is enabled (INVESTIGATION_IMPORT_ENABLED). */
+                        importEnabled: boolean;
+                        /** @description Seconds until each event source may be imported again; 0 when it may run now. */
+                        cooldowns: {
+                            [key: string]: number;
+                        };
+                        /** @description Largest area an OSM area import may cover. */
+                        osmAreaMaxSquareDegrees?: number;
+                        jobs: components["schemas"]["ImportJob"][];
+                    };
+                };
+            };
+            /** @description Invalid workspace ID. */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
+    startImportJob: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": {
+                    /** @constant */
+                    kind?: "events";
+                    sourceIds: ("ingv-fdsn" | "demo-seismic-synthetic")[];
+                    /** @default 7 */
+                    days?: number;
+                    /** @default demo */
+                    workspaceId?: string;
+                } | {
+                    /** @constant */
+                    kind: "dataset_delete";
+                    datasetId: string;
+                    /** @default demo */
+                    workspaceId?: string;
+                } | {
+                    /** @constant */
+                    kind: "osm_region";
+                    regionId: string;
+                    /** @default demo */
+                    workspaceId?: string;
+                } | {
+                    /** @constant */
+                    kind: "osm_area";
+                    /** @description Name of the area; it names the dataset. */
+                    label: string;
+                    /** @description minLon, minLat, maxLon, maxLat; at most OSM_AREA_MAX_SQUARE_DEGREES (default 1). */
+                    bbox: number[];
+                    countryCode?: string | null;
+                    categories: components["schemas"]["OsmAreaCategory"][];
+                    /** @default demo */
+                    workspaceId?: string;
+                };
+            };
+        };
+        responses: {
+            /** @description Job started. */
+            202: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        job: components["schemas"]["ImportJob"];
+                    };
+                };
+            };
+            /** @description Invalid request body (invalid_import_request) */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Imports are disabled (import_disabled) */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description The dataset to delete does not exist or is already deleted. */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description An area or region import is already running (import_kind_busy) */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description The body is not application/json. */
+            415: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Too many running jobs in the workspace (too_many_import_jobs) or rate limit. */
+            429: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
+    getImportJob: {
+        parameters: {
+            query?: {
+                workspaceId?: string;
+            };
+            header?: never;
+            path: {
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The job. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        job: components["schemas"]["ImportJob"];
+                    };
+                };
+            };
+            /** @description Unknown job or another workspace. */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
+    clearImportHistory: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": {
+                    /** @default demo */
+                    workspaceId?: string;
+                };
+            };
+        };
+        responses: {
+            /** @description How many jobs were removed. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        removed: number;
+                    };
+                };
+            };
+            /** @description Invalid workspace ID. */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Imports are disabled. */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
+    cancelImportJob: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: {
+            content: {
+                "application/json": {
+                    /** @default demo */
+                    workspaceId?: string;
+                };
+            };
+        };
+        responses: {
+            /** @description Whether a running job was cancelled; false when it already finished. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        cancelled: boolean;
+                    };
+                };
+            };
+            /** @description Imports are disabled. */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Unknown job or another workspace. */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
+    listDatasets: {
+        parameters: {
+            query?: {
+                fresh?: "true";
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The datasets. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        datasets: components["schemas"]["Dataset"][];
+                    };
+                };
+            };
+        };
+    };
+    listCatalogPlaces: {
+        parameters: {
+            query?: {
+                dataset?: string;
+                country?: string;
+                city?: string;
+                category?: string;
+                q?: string;
+                /** @description minLon,minLat,maxLon,maxLat */
+                bbox?: string;
+                limit?: number;
+                cursor?: string;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description One page. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        /** @description Null on later pages. */
+                        total: number | null;
+                        nextCursor: string | null;
+                        places: {
+                            id: string;
+                            datasetId: string;
+                            name: string;
+                            category: string | null;
+                            countryCode: string | null;
+                            city: string | null;
+                            street: string | null;
+                            houseNumber: string | null;
+                            postcode: string | null;
+                            lat: number;
+                            lon: number;
+                            details: {
+                                [key: string]: string;
+                            };
+                        }[];
+                    };
+                };
+            };
+            /** @description Invalid query or cursor, or neither a dataset nor a country (dataset_or_country_required). */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
+    listCatalogCategories: {
+        parameters: {
+            query?: {
+                dataset?: string;
+                country?: string;
+                city?: string;
+                q?: string;
+                bbox?: string;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Up to 80 categories, most places first. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        categories: {
+                            category: string;
+                            places: number;
+                        }[];
+                    };
+                };
+            };
+            /** @description Invalid query */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
+    listDatasetEvents: {
+        parameters: {
+            query?: {
+                limit?: number;
+                cursor?: string;
+            };
+            header?: never;
+            path: {
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description One page. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        /** @description Null on later pages. */
+                        total: number | null;
+                        nextCursor: string | null;
+                        events: {
+                            id: string;
+                            label: string;
+                            category: string;
+                            /** Format: date-time */
+                            observedAt: string;
+                            lat: number;
+                            lon: number;
+                            magnitude: number | null;
+                        }[];
+                    };
+                };
+            };
+            /** @description Invalid query or cursor. */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
+    listCountries: {
+        parameters: {
+            query?: {
+                fresh?: "true";
+                dataset?: string;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The countries, most places first. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        countries: components["schemas"]["CountryCoverage"][];
+                    };
+                };
+            };
+        };
+    };
+    listSettlements: {
+        parameters: {
+            query: {
+                country: string;
+                dataset?: string;
+                q?: string;
+                /** @description Comma-separated. */
+                types?: string;
+                limit?: number;
+                offset?: number;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description One page of settlements and the total. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        total: number;
+                        settlements: components["schemas"]["Settlement"][];
+                    };
+                };
+            };
+            /** @description Invalid query. */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
+    searchGeofabrikRegions: {
+        parameters: {
+            query?: {
+                q?: string;
+                parent?: string;
+                language?: "en" | "ru" | "de";
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Up to 12 regions for a search, or all children for browsing. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        regions: components["schemas"]["GeofabrikRegion"][];
+                        /** @description The place a search found when the catalogue did not name it; the regions contain it. */
+                        via?: string;
+                    };
+                };
+            };
+            /** @description Invalid query */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Too many place lookups (rate_limited). */
+            429: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description The catalogue is unavailable. */
+            502: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
+    getGeofabrikRegion: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The region and its file. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        region: components["schemas"]["GeofabrikRegion"];
+                        file: {
+                            url: string;
+                            bytes: number | null;
+                            /** Format: date-time */
+                            lastModified: string | null;
+                        };
+                    };
+                };
+            };
+            /** @description Not in the catalogue. */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
+    geocodePlace: {
+        parameters: {
+            query: {
+                q: string;
+                language?: "en" | "ru" | "de";
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Up to six settlements. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        results: components["schemas"]["GeocodeResult"][];
+                    };
+                };
+            };
+            /** @description Invalid query. */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description More than one search per second; see Retry-After. */
+            429: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Nominatim did not answer usably. */
+            502: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
                 };
             };
         };

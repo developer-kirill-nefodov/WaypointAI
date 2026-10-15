@@ -1,5 +1,7 @@
 import type { InvestigationEvent, SourceView } from "@waypoint-ai/shared";
+import { DatabaseZap } from "lucide-react";
 import { makeT, type Language } from "../../shared/i18n";
+import { importStore } from "../imports/import-store";
 import ElapsedSeconds from "./ElapsedSeconds";
 import { errorMessage } from "./errors";
 import EventTable from "./EventTable";
@@ -59,12 +61,12 @@ export default function ResultsList({
         </div>
       )}
       {ready && events.length === 0 && (
-        <p className="investigation-empty">
-          {t(
-            "Нет событий для этих фильтров. Расширьте период или снимите фильтры. Если список пуст всегда, импортируйте данные: npm run data:import:events",
-            "No events match these filters. Widen the period or clear filters. If the list is always empty, import data: npm run data:import:events",
-          )}
-        </p>
+        <div className="investigation-empty">
+          <p>{t("Нет событий для этих фильтров. Расширьте период или снимите фильтры.", "No events match these filters. Widen the period or clear filters.")}</p>
+          <button type="button" onClick={() => importStore.openDialog(undefined, "events")}>
+            <DatabaseZap size={13} />{t("Импортировать свежие события", "Import recent events")}
+          </button>
+        </div>
       )}
       {events.length > 0 && (
         <EventTable

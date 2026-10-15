@@ -1,5 +1,5 @@
 import { Fragment, useCallback, useEffect, useMemo, useState } from "react";
-import { ArrowUpRight, ChevronDown, Clock3, MapPin, Navigation, Route, RotateCw } from "lucide-react";
+import { Activity, ArrowUpRight, ChevronDown, Clock3, MapPin, MessageSquare, Navigation, Route, RotateCw, X } from "lucide-react";
 import { Circle, CircleMarker, GeoJSON as LeafletGeoJSON, MapContainer, Polygon, Popup, TileLayer, Tooltip, useMap, useMapEvents } from "react-leaflet";
 import { latLng, latLngBounds, type LatLngBounds, type LeafletEvent, type Map as LeafletMap } from "leaflet";
 import type { PlaceView, RecordView, SourceView, TripPlan } from "@waypoint-ai/shared";
@@ -160,6 +160,8 @@ function VisitedAreas({ areas, language }: { areas: VisitedArea[]; language: Lan
 function FocusPoint({ focus }: { focus: MapFocusPoint }) {
   const map = useMap();
   useEffect(() => {
+    // The map may have just become visible (a page switch); measure it before centering.
+    map.invalidateSize({ animate: false });
     map.setView([focus.lat, focus.lon], Math.max(map.getZoom(), 14), { animate: true });
     // On narrow screens the map sits below the list; bring it into view after the dialog closes.
     map.getContainer().scrollIntoView({ block: "nearest", behavior: "smooth" });
@@ -205,6 +207,14 @@ function ZoomLevel({ onZoom, selected }: { onZoom: (zoom: number) => void; selec
     }
   }, [map, selectedKey, selectedLat, selectedLon]);
   return null;
+}
+
+function recordItem(record: RecordView): MapItem {
+  return {
+    key: `record:${record.id}`, id: record.id, sourceId: record.sourceId, name: record.label, category: typeof record.attributes.category === "string" ? record.attributes.category : null,
+    lat: record.lat, lon: record.lon, kind: "record", record,
+    summary: `${record.observedAt}${typeof record.attributes.place === "object" && record.attributes.place && "name" in record.attributes.place ? ` · ${String(record.attributes.place.name)}` : ""}`,
+  };
 }
 
 /** Records from a source that is neither live nor a public snapshot (synthetic or unverified) get a dashed outline. */
@@ -290,7 +300,21 @@ type MapPanelProps = {
   recordSourceModes?: RecordSourceModes;
   radius?: SearchRadius | null;
   focus?: MapFocusPoint | null;
+  /** A place or event handed over from another panel or page; it is shown and centered but is not a query result. */
+  pinned?: { place?: PlaceView; record?: RecordView; revision: number } | null;
+  /** Events drawn as a background layer (not query results): they are not framed or listed. */
+  overlayRecords?: RecordView[];
+  /** Which markers the view frames: every result, or only the records (the events panel keeps its linked places out). */
+  fit?: "results" | "records";
+  /** Map layers the user can switch; omitted, the switches are hidden. */
+  layers?: MapLayers;
+  onLayers?: (layers: MapLayers) => void;
+  heading?: { eyebrow: string; title: string };
+  /** Hands the selected item to the assistant. */
+  onAsk?: (item: { kind: "place" | "record"; id: string; name: string }) => void;
 };
+
+export type MapLayers = { places: boolean; events: boolean };
 
 export default function MapPanel({
   language = "en",
@@ -308,6 +332,13 @@ export default function MapPanel({
   recordSourceModes = {},
   radius = null,
   focus = null,
+  pinned = null,
+  overlayRecords = [],
+  fit,
+  layers,
+  onLayers,
+  heading,
+  onAsk,
 }: MapPanelProps) {
   const investigation = variant === "investigation";
   const [places, setPlaces] = useState<MapPlace[]>([]);
@@ -329,14 +360,19 @@ export default function MapPanel({
   const mapItems = useMemo((): MapItem[] => [...new Map([
     ...places.map((place): MapItem => ({ ...place, key: `place:${place.id}`, kind: "place", place })),
     ...highlights.map((place): MapItem => ({ ...place, key: `place:${place.id}`, kind: "place", place })),
-    ...records.map((record): MapItem => ({
-      key: `record:${record.id}`, id: record.id, sourceId: record.sourceId, name: record.label, category: typeof record.attributes.category === "string" ? record.attributes.category : null,
-      lat: record.lat, lon: record.lon, kind: "record", record,
-      summary: `${record.observedAt}${typeof record.attributes.place === "object" && record.attributes.place && "name" in record.attributes.place ? ` · ${String(record.attributes.place.name)}` : ""}`,
-    })),
-  ].map((item) => [item.key, item])).values()], [highlights, places, records]);
-  const resultItems = useMemo(() => mapItems.filter((item) => item.kind === "record" || highlights.some((place) => place.id === item.id)), [highlights, mapItems]);
+    ...(pinned?.place ? [{ ...pinned.place, key: `place:${pinned.place.id}`, kind: "place", place: pinned.place } satisfies MapItem] : []),
+    ...[...overlayRecords, ...(pinned?.record ? [pinned.record] : [])].map((record): MapItem => recordItem(record)),
+    ...records.map((record): MapItem => recordItem(record)),
+  ].map((item) => [item.key, item])).values()], [highlights, overlayRecords, pinned, places, records]);
+  // Query results: the records and highlighted places; background events and the viewport places are not.
+  const resultItems = useMemo(() => {
+    const ids = new Set([...records.map((record) => `record:${record.id}`), ...highlights.map((place) => `place:${place.id}`)]);
+    return mapItems.filter((item) => ids.has(item.key));
+  }, [highlights, mapItems, records]);
   const selectedItem = useMemo(() => mapItems.find((item) => item.key === selectedResultKey), [mapItems, selectedResultKey]);
+  // The card of the selected item floats over the map; closing it hides it until another item is selected.
+  const [dismissedKey, setDismissedKey] = useState<string | null>(null);
+  useEffect(() => { setDismissedKey(null); }, [selectedResultKey, pinned?.revision]);
   const countryCodes = useMemo(() => [...new Set(highlights.map((place) => place.countryCode).filter((code): code is string => Boolean(code)))], [highlights]);
   useEffect(() => {
     let active = true;
@@ -400,14 +436,14 @@ export default function MapPanel({
     setDayRouteStates((current) => current[day]?.status === state.status && current[day]?.plan === state.plan ? current : { ...current, [day]: state });
   }, []);
   const t = (ru: string, en: string) => translate(language, ru, en);
-  const toolbarEyebrow = investigation
+  const toolbarEyebrow = heading?.eyebrow ?? (investigation
     ? t("СОБЫТИЯ · OPENSTREETMAP", "EVENTS · OPENSTREETMAP")
-    : <>OPENSTREETMAP · {t("ЕВРОПА · 6 РЕГИОНОВ", "EUROPE · 6 REGIONS")}</>;
-  const toolbarTitle = investigation
+    : "OPENSTREETMAP");
+  const toolbarTitle = heading?.title ?? (investigation
     ? t("События и места рядом", "Events and nearby places")
-    : t("Места и адреса", "Places and addresses");
-  // In the investigation view, nearby-place highlights must not refit the whole result set.
-  const fitItems = investigation ? resultItems.filter((item) => item.kind === "record") : resultItems;
+    : t("Места и адреса", "Places and addresses"));
+  // In the events view, nearby-place highlights must not refit the whole result set.
+  const fitItems = (fit ?? (investigation ? "records" : "results")) === "records" ? resultItems.filter((item) => item.kind === "record") : resultItems;
   const selectedRecord = selectedItem?.kind === "record" ? selectedItem : undefined;
   return (
     <section className="map-panel" aria-label={t("Карта и результаты", "Map and results")}>
@@ -416,7 +452,13 @@ export default function MapPanel({
           <span className="eyebrow">{toolbarEyebrow}</span>
           <h2>{toolbarTitle}</h2>
         </div>
-        <span className="map-cap">{t("зум", "zoom")} {zoom}+</span>
+        <div className="map-toolbar-side">
+          {layers && onLayers && <div className="map-layers" role="group" aria-label={t("Слои карты", "Map layers")}>
+            <button type="button" aria-pressed={layers.places} className={layers.places ? "active" : ""} onClick={() => onLayers({ ...layers, places: !layers.places })} title={t("Места в области карты", "Places in the map area")}><MapPin size={12} />{t("Места", "Places")}</button>
+            <button type="button" aria-pressed={layers.events} className={layers.events ? "active" : ""} onClick={() => onLayers({ ...layers, events: !layers.events })} title={t("Землетрясения за последнюю неделю", "Earthquakes of the last week")}><Activity size={12} />{t("События", "Events")}</button>
+          </div>}
+          <span className="map-cap">{t("зум", "zoom")} {zoom}+</span>
+        </div>
       </div>
       <div className="map-canvas">
         <MapContainer center={[49.8, 15.5]} zoom={zoom} minZoom={3} maxZoom={MAX_MAP_ZOOM} scrollWheelZoom preferCanvas fadeAnimation={false}>
@@ -424,10 +466,11 @@ export default function MapPanel({
           <ResetViewport revision={resetViewportRevision} />
           <FitToResults items={fitItems} />
           <FitToFocus focusKey={focusedDay === null ? null : String(focusedDay)} requestRevision={focusRevision} points={focusPoints} routePlan={focusRoute} />
-          <ViewportPlaces onPlaces={handlePlaces} sourceIds={sourceIds} enabled={!investigation && resultItems.length === 0} />
+          <ViewportPlaces onPlaces={handlePlaces} sourceIds={sourceIds} enabled={!investigation && resultItems.length === 0 && (layers?.places ?? true)} />
           <ZoomLevel onZoom={handleZoom} selected={investigation ? undefined : selectedItem} />
           {investigation && <FitToSelection selected={selectedRecord} places={highlights} />}
           {investigation && focus && <FocusPoint focus={focus} />}
+          {pinned && (pinned.place ?? pinned.record) && <FocusPoint focus={{ lat: (pinned.place ?? pinned.record)!.lat, lon: (pinned.place ?? pinned.record)!.lon, revision: pinned.revision }} />}
           {radius && <RadiusOverlay radius={radius} language={language} />}
           {visitedAreas.length > 0 && <VisitedAreas areas={visitedAreas} language={language} />}
           {tileUrl && <TileLayer url={tileUrl} maxZoom={MAX_MAP_ZOOM} keepBuffer={8} updateWhenZooming={false} attribution='&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap contributors</a>' />}
@@ -451,6 +494,7 @@ export default function MapPanel({
             <button type="button" className="route-build" onClick={() => setRouteRequested(true)}>{t("Построить маршрут", "Build route")}</button>
           </div>
         </section>}
+        {selectedItem && !investigation && dismissedKey !== selectedItem.key && <SelectedItemCard language={language} item={selectedItem} sourceLabel={sourceLabels[selectedItem.sourceId] ?? selectedItem.sourceId} tripContext={tripPlan ? getTripContext(selectedItem.id, tripPlan, dayRouteStates) : null} onAsk={onAsk} onClose={() => setDismissedKey(selectedItem.key)} />}
         {!tripPlan && !investigation && routeRequested && routeState.status !== "idle" && <RouteSummary language={language} state={routeState} totalPoints={routeCandidates.total} expanded={routeExpanded} onToggle={() => setRouteExpanded((value) => !value)} onRetry={() => setRouteRetryKey((value) => value + 1)} />}
       </div>
       {tripPlan && <TripPlanBoard language={language} plan={tripPlan} highlights={highlights} routeStates={dayRouteStates} sourceLabels={sourceLabels} sourceDates={sourceDates} focusedDay={focusedDay} selectedPlaceId={selectedItem?.kind === "place" ? selectedItem.id : null} onSelectDay={(day) => { setFocusedDay(day); setFocusRevision((revision) => revision + 1); const failed = day !== "city" && dayRouteStates[day]?.status === "error"; if (failed) setDayRouteRetryKeys((current) => ({ ...current, [day]: (current[day] ?? 0) + 1 })); }} onSelectPlace={(id) => onSelectResult(`place:${id}`)} />}
@@ -464,8 +508,7 @@ export default function MapPanel({
           </button>)}
         </div> : <p className="server-results-empty">{resultsLoaded ? t("По этому запросу совпадений не найдено.", "No matches found for this query.") : t("Результаты сервера появятся здесь после запроса.", "Server results will appear here after a query.")}</p>}
       </section>}
-      {selectedItem && !investigation && <SelectedItemCard language={language} item={selectedItem} sourceLabel={sourceLabels[selectedItem.sourceId] ?? selectedItem.sourceId} tripContext={tripPlan ? getTripContext(selectedItem.id, tripPlan, dayRouteStates) : null} />}
-      {!tripPlan && !investigation && <div className="results-footer"><div><strong>{resultItems.length ? t("Точки запроса", "Query points") : t("Места в области карты", "Places in map area")}</strong><span>{resultItems.length ? t("Показаны найденные объекты", "Showing query matches") : zoom < 8 ? t("Увеличьте карту для поиска", "Zoom in to search") : places.length < total ? `${t("Показаны первые", "Showing first")} ${places.length}` : t("Локальная выгрузка", "Local extract")}</span></div><span className="result-count">{(resultItems.length || total).toLocaleString(language === "ru" ? "ru-RU" : language === "de" ? "de-DE" : "en-US")}</span></div>}
+      {!tripPlan && !investigation && <div className="results-footer"><div><strong>{resultItems.length ? t("Точки запроса", "Query points") : t("Места в области карты", "Places in map area")}</strong><span>{resultItems.length ? t("Показаны найденные объекты", "Showing query matches") : zoom < MIN_PLACES_ZOOM ? t("Увеличьте карту для поиска", "Zoom in to search") : places.length < total ? `${t("Показаны первые", "Showing first")} ${places.length}` : t("Локальная выгрузка", "Local extract")}</span></div><span className="result-count">{(resultItems.length || total).toLocaleString(language === "ru" ? "ru-RU" : language === "de" ? "de-DE" : "en-US")}</span></div>}
     </section>
   );
 }
@@ -559,7 +602,7 @@ function RouteSummary({ language, state, totalPoints, expanded, onToggle, onRetr
   </section>;
 }
 
-function SelectedItemCard({ language, item, sourceLabel, tripContext }: { language: Language; item: MapItem; sourceLabel: string; tripContext: { day: number; stop: number; totalStops: number; area: "airport_radius" | "city" } | null }) {
+function SelectedItemCard({ language, item, sourceLabel, tripContext, onAsk, onClose }: { language: Language; item: MapItem; sourceLabel: string; tripContext: { day: number; stop: number; totalStops: number; area: "airport_radius" | "city" } | null; onAsk?: (item: { kind: "place" | "record"; id: string; name: string }) => void; onClose: () => void }) {
   const t = (ru: string, en: string) => translate(language, ru, en);
   const address = item.place
     ? [item.place.street && [item.place.street, item.place.houseNumber].filter(Boolean).join(" "), item.place.postcode, item.place.city].filter(Boolean).join(", ")
@@ -568,7 +611,8 @@ function SelectedItemCard({ language, item, sourceLabel, tripContext }: { langua
     ? Object.entries(item.record.attributes).filter(([, value]) => value === null || ["string", "number", "boolean"].includes(typeof value)).slice(0, 8)
     : [];
   return <section className="selected-item-card" aria-label={t("Карточка выбранного объекта", "Selected item details")}>
-    <div className="selected-item-heading"><span className="selected-item-icon">{item.kind === "record" ? <Clock3 size={16} /> : <MapPin size={16} />}</span><div><span className="eyebrow">{item.kind === "record" ? t("ЗАПИСЬ", "RECORD") : t("МЕСТО НА КАРТЕ", "MAP PLACE")}</span><h3>{item.name}</h3></div></div>
+    <div className="selected-item-heading"><span className="selected-item-icon">{item.kind === "record" ? <Clock3 size={16} /> : <MapPin size={16} />}</span><div><span className="eyebrow">{item.kind === "record" ? t("ЗАПИСЬ", "RECORD") : t("МЕСТО НА КАРТЕ", "MAP PLACE")}</span><h3>{item.name}</h3></div>
+      <button type="button" className="selected-item-close" onClick={onClose} aria-label={t("Закрыть", "Close")} title={t("Закрыть", "Close")}><X size={14} /></button></div>
     <dl className="selected-item-grid">
       {tripContext && <div className="selected-item-wide selected-trip-context"><dt>{t("В плане поездки", "Trip plan")}</dt><dd>{t(`День ${tripContext.day} · точка ${tripContext.stop} из ${tripContext.totalStops}`, `Day ${tripContext.day} · stop ${tripContext.stop} of ${tripContext.totalStops}`)} · {tripContext.area === "airport_radius" ? t("район аэропорта", "airport area") : item.place?.city ?? t("город", "city")}</dd></div>}
       <div><dt>{t("Категория", "Category")}</dt><dd>{item.category ?? t("Не указана", "Not specified")}</dd></div>
@@ -584,6 +628,7 @@ function SelectedItemCard({ language, item, sourceLabel, tripContext }: { langua
       <div className="selected-item-wide"><dt>{t("Координаты", "Coordinates")}</dt><dd>{item.lat.toFixed(6)}, {item.lon.toFixed(6)}</dd></div>
       {attributes.map(([key, value]) => <div key={key}><dt>{humanizeField(key)}</dt><dd>{value === null ? "—" : String(value)}</dd></div>)}
     </dl>
+    {onAsk && <div className="selected-item-actions"><button type="button" className="selected-item-ask" onClick={() => onAsk({ kind: item.kind, id: item.id, name: item.name })}><MessageSquare size={13} />{t("Спросить ассистента", "Ask the assistant")}</button></div>}
   </section>;
 }
 

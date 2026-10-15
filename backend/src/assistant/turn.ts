@@ -15,6 +15,7 @@ import { releaseInference, tryAcquireInference } from "../llm/inference-gate.js"
 import { resolveSettlement } from "../data/settlement.repository.js";
 import type { TripPlan } from "@waypoint-ai/shared";
 import { SYSTEM_PROMPT } from "./prompts/system-prompt.js";
+import { placeCoverage } from "../data/coverage.js";
 import { text, toolLabel } from "./copy.js";
 import { formatTripPlanEditMessage, formatTripPlanMessage } from "./trip-plan-message.js";
 import { applyTripPlanEdits, describePlanForModel, parseEditTripPlanArgs, type TripPlanChange, type TripStopFinder } from "./trip-plan-edit.js";
@@ -107,10 +108,11 @@ export async function processTurn(
     if (storedTripPlan) {
       editablePlan = { plan: storedTripPlan, places: await getPlacesByIds([...new Set(storedTripPlan.days.flatMap((day) => day.stopPlaceIds))]) };
     }
+    const coverage = await placeCoverage().catch(() => "the imported regions");
     const selectedContext = await resolveSelectedMapItem(frame.scope.selectedMapItem, allowedSourceIds, frame.scope.dateRange);
     databaseDurationMs += Math.round(performance.now() - databaseStartedAt);
     messages = [
-      { role: "system", content: `${SYSTEM_PROMPT}\nResponse language: ${language === "ru" ? "Russian" : language === "de" ? "German" : "English"}. Always answer in this language.\nAllowed sources: ${allowedSourceIds?.length ? allowedSourceIds.join(", ") : "all available"}. Date range: ${frame.scope.dateRange?.from ?? "not set"} — ${frame.scope.dateRange?.to ?? "not set"}.` },
+      { role: "system", content: `${SYSTEM_PROMPT.replace("{{PLACE_COVERAGE}}", coverage)}\nResponse language: ${language === "ru" ? "Russian" : language === "de" ? "German" : "English"}. Always answer in this language.\nAllowed sources: ${allowedSourceIds?.length ? allowedSourceIds.join(", ") : "all available"}. Date range: ${frame.scope.dateRange?.from ?? "not set"} — ${frame.scope.dateRange?.to ?? "not set"}.` },
       ...conversationHistory,
       ...(selectedContext ? [{ role: "system" as const, content: `User-selected map object (verified from the local database; use it as the main referent for “this point” or “this place”):\n${JSON.stringify(selectedContext)}` }] : []),
       ...(editablePlan ? [{ role: "system" as const, content: `Current trip plan shown on the map (stops from the local database). To change it, call ${EDIT_TRIP_PLAN_TOOL} once per change, naming stops by ref or name; to plan other cities from scratch, call ${PLAN_TRIP_TOOL}.\n${describePlanForModel(editablePlan.plan, editablePlan.places)}` }] : []),
@@ -319,7 +321,7 @@ export async function processTurn(
       messages.pop();
       const writing = startStep(text(language, "Пишу ответ", "Writing the answer"));
       const response = await callModel([
-        { role: "system", content: replyPrompt(language, editablePlan ? describePlanForModel(editablePlan.plan, editablePlan.places) : null) },
+        { role: "system", content: replyPrompt(language, editablePlan ? describePlanForModel(editablePlan.plan, editablePlan.places) : null, coverage) },
         ...messages.filter((entry) => (entry.role === "user" || entry.role === "assistant") && !entry.tool_calls?.length),
       ], [], { maxTokens: REPLY_MAX_TOKENS, onDelta: (fragment) => {
         streamed = true;
@@ -502,8 +504,8 @@ function toolStepLabel(tool: ToolName, rawArgs: unknown, language: "en" | "ru" |
 }
 
 /** Prompt for writing an answer that needs no data: what the app can do, and the trip plan if one is shown. */
-function replyPrompt(language: "en" | "ru" | "de", plan: string | null): string {
+function replyPrompt(language: "en" | "ru" | "de", plan: string | null, coverage: string): string {
   return `You are Waypoint AI, a local map assistant. Answer the user's last message in ${language === "ru" ? "Russian" : language === "de" ? "German" : "English"} in at most four short sentences of plain text. Do not call or name tools and do not write code or JSON.
-What the app can do: find places and sights in the local OpenStreetMap snapshots (Berlin, Mazovia, Romania, Île-de-France, Central Italy, the Madrid region); build and edit multi-day trip plans with a driving route per day; search imported INGV earthquakes by place, radius, period, and magnitude; describe the data sources.
+What the app can do: find places and sights in the local OpenStreetMap snapshots (${coverage}); build and edit multi-day trip plans with a driving route per day; search imported INGV earthquakes by place, radius, period, and magnitude; describe the data sources.
 Use only facts from this conversation${plan ? " and the trip plan below" : ""}; never name places, events, or numbers that are not there.${plan ? `\nCurrent trip plan: ${plan}` : ""}`;
 }

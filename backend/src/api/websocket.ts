@@ -9,6 +9,7 @@ import { ActiveTurnGate } from "./active-turn.js";
 import { clientAddress } from "./client-address.js";
 import { isAllowedOrigin } from "./origin.js";
 import { closeAllClients, startHeartbeat } from "./websocket-lifecycle.js";
+import { importJobEvents } from "../services/import-job-events.js";
 import { getCapabilities } from "../services/readiness.js";
 import { validateClientFrame } from "../schemas/websocket.js";
 import { isVoiceInputConfigured } from "../config/voice.js";
@@ -42,6 +43,12 @@ export function attachWebSocket(server: Server): (code: number, reason: string) 
 
   websocketServer.on("connection", (websocket: WebSocket, request: IncomingMessage) => {
     const activeTurn = new ActiveTurnGate();
+    // Import progress goes only to connections of the job's workspace; session.start may name it.
+    let workspaceId = "demo";
+    const stopImportEvents = importJobEvents.subscribe((job) => {
+      if (job.workspaceId === workspaceId) send(websocket, { protocolVersion: 1, type: "import.progress", requestId: job.id, job });
+    });
+    websocket.on("close", stopImportEvents);
     const client = clientAddress(request, env.TRUST_PROXY);
     const voice = new VoiceSessionManager(
       {
@@ -69,6 +76,7 @@ export function attachWebSocket(server: Server): (code: number, reason: string) 
       if (isVoiceFrame(clientFrame)) {
         voice.handle(clientFrame);
       } else if (clientFrame.type === "session.start") {
+        if (clientFrame.workspaceId) workspaceId = clientFrame.workspaceId;
         const capabilities = await getCapabilities();
         send(websocket, {
           protocolVersion: 1,

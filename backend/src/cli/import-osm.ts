@@ -3,7 +3,7 @@ import { createReadStream } from "node:fs";
 import { mkdir, stat, writeFile } from "node:fs/promises";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
-import { createOSMStream } from "osm-pbf-parser-node";
+import { OSMTransform } from "osm-pbf-parser-node";
 import { Op, type Transaction } from "sequelize";
 import { database } from "../database/client.js";
 import { initModels } from "../models/index.js";
@@ -22,6 +22,8 @@ const sourceName = option("--source-name", "OpenStreetMap — Germany");
 const sourceUrl = option("--source-url", "https://download.geofabrik.de/europe/germany-latest.osm.pbf");
 const fallbackCountryCode = option("--country-code", "DE").toUpperCase();
 const bbox = option("--bbox", "-180,-90,180,90").split(",").map(Number);
+/** With --progress-json, progress and the result are printed as one JSON object per line, for the app's import jobs. */
+const progressJson = argv.includes("--progress-json");
 if (bbox.length !== 4 || bbox.some((value) => !Number.isFinite(value))) throw new Error("--bbox must be minLon,minLat,maxLon,maxLat");
 const [minLon, minLat, maxLon, maxLat] = bbox as [number, number, number, number];
 const fileStat = await stat(file);
@@ -76,7 +78,7 @@ let hasHeader = false;
 
 try {
   await database.transaction(async (transaction) => {
-    for await (const raw of createOSMStream(file, { withTags: { node: relevantTagKeys, way: airportTagKeys, relation: false }, withInfo: false })) {
+    for await (const raw of osmStream(file, { withTags: { node: relevantTagKeys, way: airportTagKeys, relation: false }, withInfo: false }, "parsing")) {
       const entity = asRecord(raw);
       if (!hasHeader && !entity.type) {
         hasHeader = true;
@@ -122,14 +124,14 @@ try {
         await saveBatch(batch, transaction);
         imported += batch.length;
         batch = [];
-        if (imported % 10_000 === 0) console.log(`Imported ${imported.toLocaleString()} places…`);
+        if (imported % 10_000 === 0 && !progressJson) console.log(`Imported ${imported.toLocaleString()} places…`);
       }
     }
     if (!hasHeader) throw new Error("Input is not a readable OSM PBF file (header missing).");
     if (airportWays.size) {
       const requiredNodeIds = new Set([...airportWays.values()].flatMap((way) => way.refs));
       const airportCoordinates = new Map<number, { lat: number; lon: number }>();
-      for await (const raw of createOSMStream(file, { withTags: { node: ["__coordinates_only__"], way: false, relation: false }, withInfo: false })) {
+      for await (const raw of osmStream(file, { withTags: { node: ["__coordinates_only__"], way: false, relation: false }, withInfo: false }, "airports")) {
         const entity = asRecord(raw);
         if (entity.type === "node" && requiredNodeIds.has(Number(entity.id)) && typeof entity.lat === "number" && typeof entity.lon === "number") {
           airportCoordinates.set(Number(entity.id), { lat: entity.lat, lon: entity.lon });
@@ -164,9 +166,28 @@ try {
   const manifestDirectory = resolve(workspaceRoot, "data/local/europe");
   await mkdir(manifestDirectory, { recursive: true });
   await writeFile(resolve(manifestDirectory, `${sourceId}-import-manifest.json`), `${JSON.stringify({ sourceId, sourceName, sourceUrl, license: "ODbL-1.0", attribution: "© OpenStreetMap contributors", file, fileSizeBytes: fileStat.size, sha256: fileHash, snapshotDate, bbox: { minLon, minLat, maxLon, maxLat }, importedPlaces: imported, importToken }, null, 2)}\n`);
-  console.log(JSON.stringify({ sourceId, file, snapshotDate, imported, skipped, importToken }, null, 2));
+  if (progressJson) console.log(JSON.stringify({ result: { sourceId, snapshotDate, imported, skipped, importToken } }));
+  else console.log(JSON.stringify({ sourceId, file, snapshotDate, imported, skipped, importToken }, null, 2));
 } finally {
   await database.close();
+}
+
+/** The OSM entities of a PBF file; with --progress-json, how much of the file was read is printed about once a second. */
+async function* osmStream(path: string, options: ConstructorParameters<typeof OSMTransform>[0], phase: "parsing" | "airports") {
+  const readable = createReadStream(path);
+  let bytesRead = 0;
+  let reportedAt = 0;
+  readable.on("data", (chunk) => {
+    bytesRead += chunk.length;
+    const now = Date.now();
+    if (progressJson && now - reportedAt >= 1000) {
+      reportedAt = now;
+      console.log(JSON.stringify({ progress: { phase, bytesRead, totalBytes: fileStat.size, imported: imported + batch.length } }));
+    }
+  });
+  for await (const chunk of readable.pipe(new OSMTransform(options))) {
+    for (const item of chunk as unknown[]) yield item;
+  }
 }
 
 async function sha256File(path: string) {

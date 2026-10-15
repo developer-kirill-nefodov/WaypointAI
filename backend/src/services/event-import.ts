@@ -66,6 +66,18 @@ export class ImportCooldownError extends Error {
   }
 }
 
+/** Where an import is; fetching covers most of the run, so it takes 80% of the fraction. */
+export interface ImportProgress {
+  phase: "fetching" | "saving" | "linking" | "done";
+  /** 0..1 for this source. */
+  fraction: number;
+  fetched: number;
+  windowsDone: number;
+  windowsTotal: number;
+  /** Start of the window being fetched, for a phase line such as "INGV · 2026-10-08". */
+  windowStart?: Date;
+}
+
 export interface ImportEventsInput {
   adapter: EventSourceAdapter;
   store: EventImportStore;
@@ -76,6 +88,10 @@ export interface ImportEventsInput {
   signal?: AbortSignal;
   /** Called once the run row exists, so an HTTP caller can answer 202 with the run ID. */
   onRunStarted?: (runId: string) => void;
+  /** Called after each fetched window and phase change. */
+  onProgress?: (progress: ImportProgress) => void;
+  /** The period is fetched in windows of this many days, which drives progress and cancellation (default 1). */
+  windowDays?: number;
 }
 
 /** Stable error code for logs and run rows; unexpected errors become "import_failed". */
@@ -122,13 +138,26 @@ export async function importEvents(input: ImportEventsInput): Promise<ImportSumm
     // Fetch everything before writing, so an upstream failure leaves stored data untouched.
     const deadline = AbortSignal.timeout(IMPORT_FETCH_DEADLINE_MS);
     const fetchSignal = input.signal ? AbortSignal.any([input.signal, deadline]) : deadline;
-    const fetched = await fetchWindow(input.adapter, window, 0, fetchSignal).catch((error: unknown) => {
-      if (deadline.aborted && !input.signal?.aborted) throw new SourceFetchError("upstream_timeout", true);
-      throw error;
+    const windows = splitIntoWindows(window, (input.windowDays ?? 1) * DAY_MS);
+    const fetched: EventFetchResult = { events: [], skipped: 0, truncated: false };
+    const report = (phase: ImportProgress["phase"], fraction: number, windowsDone: number, windowStart?: Date) => input.onProgress?.({
+      phase, fraction, fetched: fetched.events.length, windowsDone, windowsTotal: windows.length, ...(windowStart ? { windowStart } : {}),
     });
+    for (const [index, part] of windows.entries()) {
+      report("fetching", 0.8 * (index / windows.length), index, part.start);
+      if (fetchSignal.aborted) throw input.signal?.aborted ? new DOMException("Import cancelled", "AbortError") : new SourceFetchError("upstream_timeout", true);
+      const result = await fetchWindow(input.adapter, part, 0, fetchSignal).catch((error: unknown) => {
+        if (deadline.aborted && !input.signal?.aborted) throw new SourceFetchError("upstream_timeout", true);
+        throw error;
+      });
+      fetched.events.push(...result.events);
+      fetched.skipped += result.skipped;
+      fetched.truncated ||= result.truncated;
+    }
     const events = dedupeByExternalId(fetched.events);
     counts.fetched = events.length;
     counts.skipped = fetched.skipped;
+    report("saving", 0.8, windows.length);
     const upserted = await input.store.upsertEvents(descriptor.id, events);
     counts.inserted = upserted.insertedIds.length;
     counts.updated = upserted.updatedIds.length;
@@ -136,6 +165,7 @@ export async function importEvents(input: ImportEventsInput): Promise<ImportSumm
     // Also retries events left unlinked by an earlier failure, which a re-import would otherwise skip as unchanged.
     const unlinked = await input.store.findUnlinkedRecordIds(descriptor.id, window);
     const toLink = new Set([...upserted.insertedIds, ...upserted.updatedIds, ...unlinked]);
+    report("linking", 0.9, windows.length);
     const linkedPlaces = await input.store.linkNearbyPlaces([...toLink]);
     await input.store.finishRun(runId, {
       status: "succeeded",
@@ -143,6 +173,7 @@ export async function importEvents(input: ImportEventsInput): Promise<ImportSumm
       errorCode: fetched.truncated ? "window_truncated" : null,
       finishedAt: new Date(),
     });
+    report("done", 1, windows.length);
     return { runId, sourceId: descriptor.id, window, counts, linkedPlaces, truncated: fetched.truncated };
   } catch (error) {
     const cancelled = input.signal?.aborted && !(error instanceof SourceFetchError);
@@ -178,6 +209,15 @@ export function startBackgroundImport(
       },
     );
   });
+}
+
+/** Consecutive windows of at most `spanMs`, oldest first; the last one ends at the window's end. */
+function splitIntoWindows(window: TimeWindow, spanMs: number): TimeWindow[] {
+  const windows: TimeWindow[] = [];
+  for (let start = window.start.getTime(); start < window.end.getTime(); start += spanMs) {
+    windows.push({ start: new Date(start), end: new Date(Math.min(start + spanMs, window.end.getTime())) });
+  }
+  return windows;
 }
 
 /** Splits a window in half while the source reports a truncated page. */

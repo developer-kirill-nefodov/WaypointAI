@@ -41,7 +41,9 @@ export type SourceErrorCode =
   | "upstream_bad_request"
   | "upstream_unavailable"
   | "upstream_timeout"
-  | "upstream_malformed";
+  | "upstream_malformed"
+  /** A download larger than the configured limit. */
+  | "file_too_large";
 
 /** Upstream failure with a stable code; the message never contains response bodies or credentials. */
 export class SourceFetchError extends Error {

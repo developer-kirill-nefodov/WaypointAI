@@ -1,24 +1,41 @@
 import { Fragment, lazy, Suspense, useCallback, useEffect, useRef, useState, type FormEvent, type KeyboardEvent as ReactKeyboardEvent } from "react";
-import { ArrowUp, ArrowUpRight, BrainCircuit, ChevronDown, Clock3, House, Layers3, MapPinned, MoreHorizontal, Plus, Radar, RefreshCw, SlidersHorizontal, Sparkles, Square, Trash2 } from "lucide-react";
+import { Activity, ArrowUp, ArrowUpRight, BrainCircuit, ChevronDown, Clock3, Database, House, Layers3, MapPin, MapPinned, MessageSquare, MoreHorizontal, Plus, RefreshCw, SlidersHorizontal, Sparkles, Square, Trash2 } from "lucide-react";
 import type { PlaceView, RecordView, Scope, ServerFrame, SourceView, TripPlan, SearchArea } from "@waypoint-ai/shared";
-import MapPanel from "../../widgets/map/MapPanel";
+import MapPanel, { type MapLayers } from "../../widgets/map/MapPanel";
+import { EMPTY_SCENE, type MapScene } from "../../widgets/map/map-scene";
+import { useCachedQuery } from "../../shared/data-cache";
+import { eventQueryParams, searchEvents } from "../../shared/api/investigations";
 import { clearAssistantHistory, loadCapabilities, loadDataSources, type Capabilities, type ConnectionState } from "../../shared/api/client";
 import { createAssistantConnection, type AssistantConnection, type ReconnectInfo } from "../../shared/api/assistantSocket";
 import { readLanguage, saveLanguage, translate, type Language } from "../../shared/i18n";
 import ModelInfoPage from "./ModelInfoPage";
 import HomeDashboard from "./HomeDashboard";
 import Logo from "../../shared/ui/Logo";
-import { pageCaption, pageFromPath, pageTitle, pathForPage, type AppPage } from "../../shared/routing";
+import { pageCaption, pageFromPath, pageTitle, pathForPage, rememberPageSearch, type AppPage } from "../../shared/routing";
 import MicButton, { voiceStatusText } from "../voice/MicButton";
 import { isVoiceFrame, useVoiceInput } from "../voice/useVoiceInput";
 import { compactResult, lastUserMessage, readSavedConversation, writeSavedConversation, type ChatResult, type Message, type SavedChat, type TurnStep } from "./chat-storage";
 import TurnSteps from "./TurnSteps";
+import ImportLayer from "../imports/ImportLayer";
+import { importStore } from "../imports/import-store";
 import { contextSuggestions, rotateSuggestions, starterSuggestions } from "./suggestions";
 
 const MESSAGE_ANCHOR_OFFSET_PX = 16;
 const MarkdownMessage = lazy(() => import("./MarkdownMessage"));
-// Loaded on first visit so the investigation page does not grow the initial bundle.
-const InvestigationWorkspace = lazy(() => import("../investigation/InvestigationWorkspace"));
+// The events and places modes of the map page load on first use, so they do not grow the initial bundle.
+const EventsPanel = lazy(() => import("../investigation/EventsPanel"));
+const PlacesPanel = lazy(() => import("../map/PlacesPanel"));
+
+type MapMode = "assistant" | "events" | "places";
+
+/** The map page's mode from the address: `/map?mode=events`; the former `/investigation` page opens the events mode. */
+function readMapMode(): MapMode {
+  if (window.location.pathname.replace(/\/+$/, "") === "/investigation") return "events";
+  if (window.location.pathname.replace(/\/+$/, "") !== "/map") return "assistant";
+  const mode = new URLSearchParams(window.location.search).get("mode");
+  return mode === "events" || mode === "places" ? mode : "assistant";
+}
+const DataPage = lazy(() => import("../data/DataPage"));
 
 function welcomeMessage(language: Language): Message {
   return { role: "assistant", text: translate(language, "Привет! Я локальный помощник для поиска и изучения геоданных. Опишите, что хотите найти.", "Hi! I’m your local assistant for exploring geospatial data. Tell me what you’d like to find.") };
@@ -35,11 +52,34 @@ export default function AssistantWorkspace() {
   }, []);
   const setActivePage = useCallback((page: AppPage) => {
     const path = pathForPage(page);
-    if (window.location.pathname !== path) window.history.pushState({ page }, "", path);
+    if (`${window.location.pathname}${window.location.search}` !== path) window.history.pushState({ page }, "", path);
     showPage(page);
   }, [showPage]);
+  const [mapMode, setMapModeState] = useState<MapMode>(readMapMode);
+  const [visitedModes, setVisitedModes] = useState<Set<MapMode>>(() => new Set([readMapMode()]));
+  const setMapMode = useCallback((mode: MapMode) => {
+    setMapModeState(mode);
+    setVisitedModes((current) => current.has(mode) ? current : new Set([...current, mode]));
+    const search = mode === "assistant" ? "" : `?mode=${mode}`;
+    rememberPageSearch("workspace", search);
+    if (window.location.pathname === "/map" && window.location.search !== search) window.history.pushState({ page: "workspace" }, "", `/map${search}`);
+  }, []);
   useEffect(() => {
-    const onPopState = () => showPage(pageFromPath(window.location.pathname));
+    // The former event explorer address becomes the map's events mode.
+    const mode = readMapMode();
+    if (mode !== "assistant") rememberPageSearch("workspace", `?mode=${mode}`);
+    if (window.location.pathname.replace(/\/+$/, "") === "/investigation") window.history.replaceState({ page: "workspace" }, "", "/map?mode=events");
+  }, []);
+  useEffect(() => {
+    const onPopState = () => {
+      const page = pageFromPath(window.location.pathname);
+      showPage(page);
+      if (page === "workspace") {
+        const mode = readMapMode();
+        setMapModeState(mode);
+        setVisitedModes((current) => current.has(mode) ? current : new Set([...current, mode]));
+      }
+    };
     window.addEventListener("popstate", onPopState);
     return () => window.removeEventListener("popstate", onPopState);
   }, [showPage]);
@@ -93,6 +133,14 @@ export default function AssistantWorkspace() {
   const [tripPlan, setTripPlan] = useState<TripPlan | null>(savedConversation.result?.tripPlan ?? null);
   const [resultsLoaded, setResultsLoaded] = useState(Boolean(savedConversation.result));
   const [selectedResultKey, setSelectedResultKey] = useState<string | null>(null);
+  // A place or event handed to the assistant from another mode or page: shown and selected on the map without
+  // replacing the chat's results, so the next question can refer to it.
+  const [pinned, setPinned] = useState<{ place?: PlaceView; record?: RecordView; revision: number } | null>(null);
+  const [eventsScene, setEventsScene] = useState<MapScene>(EMPTY_SCENE);
+  const [placesScene, setPlacesScene] = useState<MapScene>(EMPTY_SCENE);
+  const eventsSelectRef = useRef<((key: string) => void) | null>(null);
+  const placesSelectRef = useRef<((key: string) => void) | null>(null);
+  const [mapLayers, setMapLayers] = useState<MapLayers>({ places: true, events: false });
   const [resetViewportRevision, setResetViewportRevision] = useState(0);
   const [lastSubmittedQuery, setLastSubmittedQuery] = useState(() => lastUserMessage(savedConversation.messages));
   const [suggestionOffset, setSuggestionOffset] = useState(0);
@@ -121,6 +169,7 @@ export default function AssistantWorkspace() {
             return;
           }
           if (frame.type === "session.ready") setCapabilities({ assistantStatus: frame.assistantStatus, modelLabel: frame.modelLabel, demoMode: frame.demoMode, voiceInput: frame.voiceInput });
+          if (frame.type === "import.progress") importStore.upsert(frame.job, true);
           if (frame.type === "turn.status") setProgressLabel(frame.label);
           if (frame.type === "turn.step") {
             const step: TurnStep = { id: frame.stepId, label: frame.label, state: frame.state, ...(frame.detail ? { detail: frame.detail } : {}) };
@@ -233,6 +282,37 @@ export default function AssistantWorkspace() {
   useEffect(() => {
     voiceFrameHandlerRef.current = voice.handleFrame;
   }, [voice.handleFrame]);
+
+  // Background events layer of the assistant map: the last week, up to one page.
+  const eventsLayer = useCachedQuery(mapMode === "assistant" && mapLayers.events ? "map:events-layer" : null, () => searchEvents(eventQueryParams({ days: 7, minMagnitude: null, sourceIds: [], near: null, limit: 200 })), 5 * 60_000);
+  const sourceLabels = Object.fromEntries(sources.map((source) => [source.id, source.label]));
+  /** Starts a question about a place or event: it becomes the selected map point and a ready question is offered. */
+  const askAbout = useCallback(({ place, record }: { place?: PlaceView; record?: RecordView }) => {
+    const item = place ?? record;
+    if (!item) return;
+    setPinned((current) => ({ place, record, revision: (current?.revision ?? 0) + 1 }));
+    setSelectedResultKey(`${place ? "place" : "record"}:${item.id}`);
+    setDraft(record
+      ? translate(language, "Были ли ещё землетрясения в радиусе 30 км от выбранной точки на карте за последние 30 дней?", "Were there other earthquakes within 30 km of the selected map point in the last 30 days?")
+      : translate(language, "Были ли землетрясения в радиусе 50 км от выбранной точки на карте за последние 30 дней?", "Were there earthquakes within 50 km of the selected map point in the last 30 days?"));
+    setMapMode("assistant");
+    window.setTimeout(() => composerRef.current?.focus(), 0);
+  }, [language, setMapMode]);
+  /** The assistant map's own selection: only the question is offered. */
+  const askAboutSelection = useCallback((item: { kind: "place" | "record"; id: string; name: string }) => {
+    setDraft(item.kind === "record"
+      ? translate(language, "Были ли ещё землетрясения в радиусе 30 км от выбранной точки на карте за последние 30 дней?", "Were there other earthquakes within 30 km of the selected map point in the last 30 days?")
+      : translate(language, "Были ли землетрясения в радиусе 50 км от выбранной точки на карте за последние 30 дней?", "Were there earthquakes within 50 km of the selected map point in the last 30 days?"));
+    window.setTimeout(() => composerRef.current?.focus(), 0);
+  }, [language]);
+  useEffect(() => {
+    const onShowPlace = (event: Event) => {
+      askAbout({ place: (event as CustomEvent<PlaceView>).detail });
+      setActivePage("workspace");
+    };
+    window.addEventListener("waypoint:show-place", onShowPlace);
+    return () => window.removeEventListener("waypoint:show-place", onShowPlace);
+  }, [askAbout, setActivePage]);
 
   useEffect(() => {
     if (activePage === "workspace" && focusComposerOnWorkspaceRef.current) {
@@ -493,26 +573,32 @@ export default function AssistantWorkspace() {
       <aside className="rail">
         <button type="button" className="brand-mark" aria-label={t("На главную", "Go to home")} title={t("На главную", "Go to home")} onClick={() => { setActivePage("home"); window.scrollTo({ top: 0, behavior: "smooth" }); }}><Logo size={38} title="" /></button>
         <button type="button" className={`rail-button${activePage === "home" ? " active" : ""}`} aria-label={t("Главная", "Home")} title={t("Главная", "Home")} aria-pressed={activePage === "home"} onClick={() => { setActivePage("home"); window.scrollTo({ top: 0, behavior: "smooth" }); }}><House size={18} strokeWidth={1.8} /></button>
-        <button type="button" className={`rail-button${activePage === "workspace" ? " active" : ""}`} aria-label={t("Карта и чат", "Map and chat")} title={t("Карта и чат", "Map and chat")} aria-pressed={activePage === "workspace"} onClick={() => setActivePage("workspace")}><MapPinned size={18} strokeWidth={1.8} /></button>
-        <button type="button" className={`rail-button${activePage === "investigation" ? " active" : ""}`} aria-label={t("Обзор событий", "Event explorer")} title={t("Обзор событий", "Event explorer")} aria-pressed={activePage === "investigation"} onClick={() => setActivePage("investigation")}><Radar size={18} strokeWidth={1.8} /></button>
+        <button type="button" className={`rail-button${activePage === "workspace" ? " active" : ""}`} aria-label={t("Карта", "Map")} title={t("Карта: ассистент, события, места", "Map: assistant, events, places")} aria-pressed={activePage === "workspace"} onClick={() => setActivePage("workspace")}><MapPinned size={18} strokeWidth={1.8} /></button>
+        <button type="button" className={`rail-button${activePage === "data" ? " active" : ""}`} aria-label={t("Данные", "Data")} title={t("Данные", "Data")} aria-pressed={activePage === "data"} onClick={() => setActivePage("data")}><Database size={18} strokeWidth={1.8} /></button>
         <button type="button" className={`rail-button${activePage === "model" ? " active" : ""}`} aria-label={t("Модель ИИ", "AI model")} title={t("Модель ИИ", "AI model")} aria-pressed={activePage === "model"} onClick={() => setActivePage("model")}><BrainCircuit size={18} strokeWidth={1.8} /></button>
         <div className="rail-spacer" />
         <div className="avatar">U</div>
       </aside>
 
-      <section className={activePage === "workspace" || activePage === "investigation" ? "workspace workspace-fill" : "workspace"}>
+      <section className={activePage === "workspace" || activePage === "data" ? "workspace workspace-fill" : "workspace"}>
         <h1 className="sr-only">{pageTitle(activePage, language)}</h1>
-        {activePage === "model" && <ModelInfoPage language={language} modelLabel={capabilities?.modelLabel ?? null} ready={status === "ready" || status === "data_unavailable"} />}
-        {activePage === "home" && <HomeDashboard language={language} modelLabel={capabilities?.modelLabel ?? null} modelReady={status === "ready" || status === "data_unavailable"} connection={connection} sources={sources} sourcesLoading={sourcesLoading} sourcesFailed={sourceLoadFailed} resultsLoaded={resultsLoaded} resultCount={mapPlaces.length + mapRecords.length} lastQuery={lastSubmittedQuery} onOpenWorkspace={() => setActivePage("workspace")} onOpenModel={() => setActivePage("model")} onChoosePrompt={(prompt) => { setDraft(prompt); setActivePage("workspace"); focusComposerOnWorkspaceRef.current = true; }} />}
-        {visitedPages.has("investigation") && (
-          <div className="page-keepalive" hidden={activePage !== "investigation"}>
-            <Suspense fallback={<p className="investigation-state" role="status">{t("Загружаем…", "Loading…")}</p>}>
-              <InvestigationWorkspace language={language} />
-            </Suspense>
+        {visitedPages.has("data") && (
+          <div className="page-keepalive" hidden={activePage !== "data"}>
+            <Suspense fallback={null}><DataPage language={language} /></Suspense>
           </div>
         )}
+        {activePage === "model" && <ModelInfoPage language={language} modelLabel={capabilities?.modelLabel ?? null} ready={status === "ready" || status === "data_unavailable"} />}
+        {activePage === "home" && <HomeDashboard language={language} modelLabel={capabilities?.modelLabel ?? null} modelReady={status === "ready" || status === "data_unavailable"} connection={connection} sources={sources} sourcesLoading={sourcesLoading} sourcesFailed={sourceLoadFailed} resultsLoaded={resultsLoaded} resultCount={mapPlaces.length + mapRecords.length} lastQuery={lastSubmittedQuery} onOpenWorkspace={() => setActivePage("workspace")} onOpenModel={() => setActivePage("model")} onChoosePrompt={(prompt) => { setDraft(prompt); setActivePage("workspace"); focusComposerOnWorkspaceRef.current = true; }} />}
         {visitedPages.has("workspace") && <div className="content-grid" hidden={activePage !== "workspace"}>
-          <section className="chat-panel" aria-label={t("Чат помощника", "Assistant chat")}>
+          <section className="chat-panel map-side" aria-label={t("Панель карты", "Map panel")}>
+            <div className="map-modes" role="tablist" aria-label={t("Режим карты", "Map mode")}>
+              {([
+                ["assistant", <MessageSquare key="i" size={14} />, t("Ассистент", "Assistant")],
+                ["events", <Activity key="i" size={14} />, t("События", "Events")],
+                ["places", <MapPin key="i" size={14} />, t("Места", "Places")],
+              ] as const).map(([mode, icon, label]) => <button key={mode} type="button" role="tab" aria-selected={mapMode === mode} className={mapMode === mode ? "active" : ""} onClick={() => setMapMode(mode)}>{icon}{label}</button>)}
+            </div>
+            <div className="map-mode-pane chat-pane" hidden={mapMode !== "assistant"}>
             <div className="panel-heading chat-heading">
               <div className="chat-heading-title"><span className="eyebrow">{t("ЛОКАЛЬНЫЙ ПОМОЩНИК", "LOCAL ASSISTANT")}</span><h2 title={conversationTitle(messages, language)}>{conversationTitle(messages, language)}</h2></div>
               <div className="panel-heading-actions">
@@ -609,9 +695,22 @@ export default function AssistantWorkspace() {
                 </div>
               </div>
             </form>
+            </div>
+            {visitedModes.has("events") && <div className="map-mode-pane" hidden={mapMode !== "events"}>
+              <Suspense fallback={<p className="investigation-state" role="status">{t("Загружаем…", "Loading…")}</p>}>
+                <EventsPanel language={language} onScene={setEventsScene} selectRef={eventsSelectRef} onAsk={(event) => askAbout({ record: event })} />
+              </Suspense>
+            </div>}
+            {visitedModes.has("places") && <div className="map-mode-pane" hidden={mapMode !== "places"}>
+              <Suspense fallback={<p className="investigation-state" role="status">{t("Загружаем…", "Loading…")}</p>}>
+                <PlacesPanel language={language} onScene={setPlacesScene} selectRef={placesSelectRef} onAsk={(place) => askAbout({ place })} />
+              </Suspense>
+            </div>}
           </section>
 
-          <MapPanel language={language} highlights={mapPlaces} records={mapRecords} tripPlan={tripPlan} radius={searchArea} sourceIds={selectedSourceIds} selectedResultKey={selectedResultKey} onSelectResult={setSelectedResultKey} sourceLabels={Object.fromEntries(sources.map((source) => [source.id, source.label]))} sourceDates={Object.fromEntries(sources.flatMap((source) => source.snapshotDate ? [[source.id, source.snapshotDate]] : []))} resultsLoaded={resultsLoaded} resetViewportRevision={resetViewportRevision} />
+          {mapMode === "assistant" ? <MapPanel language={language} pinned={pinned} overlayRecords={mapLayers.events ? eventsLayer.data?.events ?? [] : []} layers={mapLayers} onLayers={setMapLayers} onAsk={askAboutSelection} highlights={mapPlaces} records={mapRecords} tripPlan={tripPlan} radius={searchArea} sourceIds={selectedSourceIds} selectedResultKey={selectedResultKey} onSelectResult={setSelectedResultKey} sourceLabels={sourceLabels} sourceDates={Object.fromEntries(sources.flatMap((source) => source.snapshotDate ? [[source.id, source.snapshotDate]] : []))} resultsLoaded={resultsLoaded} resetViewportRevision={resetViewportRevision} />
+            : mapMode === "events" ? <MapPanel language={language} variant="investigation" heading={{ eyebrow: t("СОБЫТИЯ · OPENSTREETMAP", "EVENTS · OPENSTREETMAP"), title: t("События и места рядом", "Events and nearby places") }} records={eventsScene.records} recordSourceModes={eventsScene.recordSourceModes} highlights={eventsScene.highlights} radius={eventsScene.radius} focus={eventsScene.focus} selectedResultKey={eventsScene.selectedKey} onSelectResult={(key) => eventsSelectRef.current?.(key)} sourceLabels={eventsScene.sourceLabels} resultsLoaded={eventsScene.resultsLoaded} />
+              : <MapPanel language={language} variant="investigation" fit="results" heading={{ eyebrow: t("МЕСТА · OPENSTREETMAP", "PLACES · OPENSTREETMAP"), title: t("Каталог мест", "Place catalog") }} highlights={placesScene.highlights} selectedResultKey={placesScene.selectedKey} onSelectResult={(key) => placesSelectRef.current?.(key)} sourceLabels={sourceLabels} resultsLoaded={placesScene.resultsLoaded} />}
         </div>}
         <footer className="app-footer">
           <div className="app-footer-brand">
@@ -629,6 +728,7 @@ export default function AssistantWorkspace() {
           </div>
         </footer>
       </section>
+      <ImportLayer language={language} />
     </main>
   );
 }

@@ -58,7 +58,7 @@ function adapter(fetchEvents) {
 }
 
 const now = new Date("2026-10-13T00:00:00Z");
-const base = { days: 7, cooldownSeconds: 0, now };
+const base = { days: 7, cooldownSeconds: 0, now, windowDays: 7 };
 
 test("a repeated import inserts nothing and counts unchanged events as skipped", async () => {
   const store = memoryStore();

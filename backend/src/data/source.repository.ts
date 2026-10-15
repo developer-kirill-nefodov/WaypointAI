@@ -9,7 +9,9 @@ export async function listSources() {
   try {
     await database.authenticate();
     const [sources, syncBySource] = await Promise.all([
+      // A deleted dataset keeps its row for the sync history, marked unavailable; it is not offered as a source.
       Source.findAll({
+        where: { status: "ready" },
         attributes: ["id", "label", "mode", "status", "attribution", "snapshotDate", "sourceUrl", "license"],
         order: [["label", "ASC"]],
         raw: true,

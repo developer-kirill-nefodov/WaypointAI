@@ -59,9 +59,8 @@ export function safeSourceEventUrl(event: InvestigationEvent): string | null {
 }
 
 export function isEventSource(source: SourceView): boolean {
-  return source.mode === "approved_live"
-    || source.mode === "synthetic_local"
-    || Boolean(source.lastSync);
+  // Place datasets imported from the app also have sync runs, so the mode alone decides.
+  return source.mode === "approved_live" || source.mode === "synthetic_local";
 }
 
 export function sourceModeLabel(mode: SourceView["mode"], language: Language): string {

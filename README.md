@@ -2,7 +2,7 @@
 
 Waypoint AI is a self-hosted map assistant built around one rule: **the model cannot invent a fact**. A local LLM turns natural-language requests into validated, read-only backend searches, and every place name, coordinate, and route on the map comes from verified database rows or the routing service. When the model is unavailable, a rule-based parser takes over and the UI says so.
 
-It covers OpenStreetMap places, multi-city itineraries with road routes, and public earthquake data searched by place, radius, and period in a separate event explorer.
+It covers OpenStreetMap places, multi-city itineraries with road routes, and public earthquake data searched by place, radius, and period — all on one map with three modes: the assistant, events, and places.
 
 ![Waypoint AI: the chat finds earthquakes within 60 km of Perugia and draws the search radius on the map](docs/media/waypoint-ai-route-chat.png)
 
@@ -16,14 +16,15 @@ The model runs through a locally managed Ollama service. It can request a small 
 
 ## What the demo shows
 
-- English, Russian, and German assistant interactions over WebSocket, with streamed tool progress and automatic reconnection.
+- English, Russian, and German assistant interactions over WebSocket: a live step feed (understanding, each tool call with its result count, assembling the answer), answers streamed as they are written, and automatic reconnection.
 - Local inference through Ollama. The model interprets every message in any language and answers only through allowlisted tools: five read-only searches (`search_places`, `search_records`, `get_record_details`, `list_sources`, `search_events`), `plan_trip` and `edit_trip_plan` for the trip plan of the current conversation, and `reply` for answers that need no data. The server validates every tool call with Zod; there are no keyword rules for intent.
 - Search over imported OpenStreetMap places and clear source coverage metadata.
 - Deterministic itineraries for 1–7 days across up to five cities ("Rome and Florence for 5 days"): stops come from verified place rows, each day gets its own road route, and each city's visited area is outlined on the map. The plan stays editable in the chat, in any language: "add a museum to day 2", "remove the first stop of day 1", "move Melt Museum to day 2", "one more day with parks", "places only, no route". The server keeps the plan per conversation and picks every new stop from the database; the model only names the change.
 - Event search from the chat: "earthquakes within 60 km of Perugia this month" resolves the settlement on the server, runs a bounded radius query, and draws the circle on the map.
 - Explicit empty, clarification, model-unavailable, and route-unavailable states.
 - Optional live voice dictation through OpenAI (disabled by default; the only feature that sends data off the machine). See [Voice input](#voice-input-demo-opt-in).
-- An event explorer for public earthquake data: imported INGV events linked to nearby OSM places, a bounded REST API with keyset pagination, event details in a modal, and natural-language queries in which the model only fills in validated search filters, with a rule-based fallback. See [Event explorer](#event-explorer-demo).
+- One map page with three modes: **Assistant** (the chat), **Events** (imported INGV earthquakes by period, magnitude, and source, with a period summary and details linked to nearby OSM places), and **Places** (the place catalog by country, city, and category). Any event or place can be handed to the assistant with "Ask the assistant": it becomes the selected map point and a ready question is offered. See [Map and events](#map-and-events-demo).
+- A **Data** page to explore, import, and delete datasets: every record page by page beside a map, countries and cities, and the import history.
 
 The included OpenStreetMap extracts cover selected regions in Germany, Poland, Romania, France, Italy, and Spain; coverage is not complete in every country. Event records are imported on demand from INGV; an optional synthetic event set for offline demos is clearly labelled.
 
@@ -67,7 +68,7 @@ npm run model:serve
 npm run model:pull
 ```
 
-Optionally import recent earthquake events for the event explorer (requires network access to INGV):
+Optionally import recent earthquake events for the map's events mode (requires network access to INGV):
 
 ```bash
 npm run data:import:events -- --source ingv-fdsn --days 7
@@ -79,7 +80,7 @@ Then start the app:
 npm run dev
 ```
 
-The frontend runs at `http://127.0.0.1:5173` (pages: `/`, `/map`, `/investigation` for the event explorer, `/model`); the API health endpoint is `http://127.0.0.1:8000/api/v1/healthz`. Model weights, Ollama runtime files, map extracts, and local environment values are excluded from Git. Setup scripts do not run automatically when the app starts. See [model configuration](docs/local-model-setup.md) for environment settings.
+The frontend runs at `http://127.0.0.1:5173` (pages: `/`, `/map` with `?mode=events` or `?mode=places`, `/data`, `/model`; the former `/investigation` opens the events mode); the API health endpoint is `http://127.0.0.1:8000/api/v1/healthz`. Model weights, Ollama runtime files, map extracts, and local environment values are excluded from Git. Setup scripts do not run automatically when the app starts. See [model configuration](docs/local-model-setup.md) for environment settings.
 
 ## Data and privacy boundaries
 
@@ -87,12 +88,13 @@ The browser talks only to the backend. The backend is the only component that co
 
 OpenStreetMap attribution and source metadata are shown in the app. The optional map tile and routing providers are separate external services; routing sends coordinates only. The demo does not provide user authentication or multi-workspace authorization and should not be used with sensitive data.
 
-## Event explorer (demo)
+## Map and events (demo)
 
-The **Event explorer** page (radar icon) searches imported events by period, magnitude, source, and radius; shows each event's provenance, licence, last sync, and nearby OpenStreetMap places; and accepts natural-language queries such as "events within 30 km of Norcia in the last 3 days".
+The **Map** page has one map and a side panel with three modes. **Events** searches imported events by period, magnitude, source, and radius, summarizes the period (how many events, the strongest magnitude, the latest), and shows each event's provenance, licence, and nearby OpenStreetMap places. Questions in plain words, such as "events within 30 km of Norcia in the last 3 days", go to the **Assistant**, which calls `search_events` and draws the radius on the same map; "Ask the assistant" on an event or place makes it the selected map point for such a question. On the assistant map, an **Events** layer switch shows the last week's earthquakes behind the chat's results.
 
 - **Data source.** [INGV](https://terremoti.ingv.it/en) earthquake catalogue (FDSN event service, CC BY 4.0), imported manually. Imports are idempotent, audited in `source_sync_runs`, and retried safely. For offline demos, `--source demo-seismic-synthetic` loads generated events labelled as synthetic.
-- **API.** `GET /api/v1/investigations/events`, `GET /events/{id}`, `GET /entities/{id}`, `POST /query`, and an import trigger that is disabled by default. See [`contracts/openapi.yaml`](contracts/openapi.yaml).
+- **Import from the app.** "Import data" opens a dialog with three tabs. *City or area* finds a city through OpenStreetMap Nominatim, shows its extent on a small map, and loads the chosen kinds of places (attractions, museums, parks, restaurants, …) from the Overpass API into its own dataset (`osm-area-<name>`); the assistant can search and plan trips there on its next turn. *Whole region* searches the Geofabrik catalogue ("Lesser Poland", "Bayern", "Luxembourg"), shows the file size and date, then downloads the region and parses it in a separate process with progress in megabytes, the same way the built-in regions were imported. *Events* loads one or more event sources (INGV, synthetic demo) for 1–30 days. The loaded datasets are on the **Data** page. Closing it keeps the import running in a dock at the side of the page, with a ring and a bar per source, the day being fetched, counts, cancel, and retry for failed sources. Progress arrives over the assistant WebSocket, jobs are stored in `import_jobs`, so the dock reattaches after a reload, and the page refreshes when a job finishes. Starting imports needs `INVESTIGATION_IMPORT_ENABLED=true` (there is no authentication). Overpass and Nominatim are reached only on allowlisted hosts, at most one area import runs at a time with a pause between requests, and an area is limited to `OSM_AREA_MAX_SQUARE_DEGREES` (default 1).
+- **API.** `GET /api/v1/investigations/events`, `GET /events/{id}`, `GET /entities/{id}`, `POST /query`, and import jobs (`GET|POST /imports`, `GET /imports/{id}`, `POST /imports/{id}/cancel`); starting imports is disabled by default. See [`contracts/openapi.yaml`](contracts/openapi.yaml).
 - **AI boundary.** For a query, the local model may call only `search_events`. Its arguments are strictly validated, place names are resolved to verified OSM settlements, and the database returns the rows. When the model is unavailable or returns an invalid call, a rule-based parser is used and the UI says so.
 
 | Variable | Default | Purpose |

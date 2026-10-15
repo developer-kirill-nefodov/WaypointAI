@@ -1,5 +1,3 @@
-import type { AppliedEventFilters, InvestigationQueryResponse, QueryInterpretation } from "@waypoint-ai/shared";
-
 /** A point the user asked to see on the map: the event itself or one of its linked places. */
 export type MapFocusTarget = {
   kind: "record" | "place";
@@ -26,20 +24,4 @@ export type EventFilterState = {
   minMagnitude: number | null;
   sourceIds: string[];
   near: NearFilter | null;
-};
-
-/** A failed natural-language query, with the place the interpreter extracted when there was one. */
-export type QueryErrorState = {
-  code: string;
-  place?: string;
-  fallbackReason?: string;
-};
-
-/** A completed natural-language query: what was asked, how it was read, and what the server applied. */
-export type QueryResultInfo = {
-  text: string;
-  interpretation: QueryInterpretation;
-  resolvedPlace: InvestigationQueryResponse["resolvedPlace"];
-  appliedFilters: AppliedEventFilters;
-  durationMs: number;
 };

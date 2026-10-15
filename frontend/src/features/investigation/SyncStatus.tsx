@@ -1,74 +1,51 @@
 import type { SourceView } from "@waypoint-ai/shared";
+import { ArrowRight } from "lucide-react";
 import { makeT, type Language } from "../../shared/i18n";
-import { formatUtc } from "./format";
+import { navigateTo, rememberPageSearch } from "../../shared/routing";
+import { useImportState } from "../imports/import-store";
+import { formatEventTime } from "./format";
 import type { SourcesState } from "./useSources";
-import Warning from "./Warning";
 
-type SyncStatusProps = {
+type DataStatusProps = {
   language: Language;
-  /** Event sources only; place snapshots have no import runs to show. */
+  /** Event sources only. */
   sources: SourceView[];
   state: SourcesState["status"];
 };
 
-export default function SyncStatus({ language, sources, state }: SyncStatusProps) {
+/**
+ * One line about the events data: which sources there are and when each was last updated, with a link to the data
+ * page. Import history, failures, and cancellations live on the data page, not here.
+ */
+export default function DataStatus({ language, sources, state }: DataStatusProps) {
   const t = makeT(language);
-  if (state === "loading") {
-    return <p className="investigation-sync">{t("Загружаем источники…", "Loading sources…")}</p>;
-  }
-  if (state === "error") {
-    return (
-      <p className="investigation-sync failed">
-        {t("Не удалось загрузить статус источников.", "Could not load source status.")}
-      </p>
-    );
-  }
-  if (!sources.length) {
-    return (
-      <p className="investigation-sync">
-        {t("Источники событий ещё не импортированы.", "No event sources have been imported yet.")}
-      </p>
-    );
-  }
+  const importing = useImportState((value) => value.jobs.some((job) => job.status === "running" && job.params.kind === "events"));
+  const openData = () => {
+    rememberPageSearch("data", sources.length === 1 ? `?dataset=${encodeURIComponent(sources[0]!.id)}` : "");
+    navigateTo("data");
+  };
+  if (state === "loading") return <p className="investigation-sync">{t("Загружаем источники…", "Loading sources…")}</p>;
+  if (state === "error") return <p className="investigation-sync failed">{t("Не удалось загрузить источники.", "Could not load the sources.")}</p>;
   return (
-    <ul className="investigation-sync" aria-label={t("Статус синхронизации", "Sync status")}>
-      {sources.map((source) => {
-        const sync = source.lastSync;
-        const running = sync?.status === "running" ? `${t("импорт идёт", "import running")} · ` : "";
-        const synced = sync?.lastSucceededAt
-          ? `${t("синхр.", "synced")} ${formatUtc(sync.lastSucceededAt)}`
-          : t("не синхронизирован", "never synced");
-        return (
-          <li key={source.id} className={sync?.status ?? "never"}>
-            <i aria-hidden="true" />
-            <strong>{source.id}</strong>
-            <span>{running}{synced}</span>
-          </li>
-        );
-      })}
-    </ul>
+    <p className="investigation-sync">
+      <span>
+        {t("Данные", "Data")}:{" "}
+        {sources.length ? sources.map((source, index) => (
+          <span key={source.id}>
+            {index > 0 && " · "}
+            <strong>{shortName(source)}</strong>
+            {source.lastSync?.lastSucceededAt && <> {t("обновлено", "updated")} {formatEventTime(source.lastSync.lastSucceededAt, language)}</>}
+          </span>
+        )) : t("событий ещё нет", "no events yet")}
+        {importing && <> · <em>{t("идёт импорт", "importing")}</em></>}
+      </span>
+      <button type="button" onClick={openData}>{t("Управлять", "Manage")}<ArrowRight size={11} /></button>
+    </p>
   );
 }
 
-type FailedImportWarningProps = {
-  language: Language;
-  sources: SourceView[];
-};
-
-/** Shown when an event source's last import failed; the rows are then older imported data. */
-export function FailedImportWarning({ language, sources }: FailedImportWarningProps) {
-  const t = makeT(language);
-  const failed = sources.filter((source) => source.lastSync?.status === "failed");
-  if (!failed.length) return null;
-  const codes = failed.map((source) => `${source.id}: ${source.lastSync?.errorCode ?? "error"}`).join(", ");
-  return (
-    <Warning>
-      {t(
-        "Последний импорт завершился ошибкой; показаны ранее загруженные данные.",
-        "The last import failed; previously imported data is shown.",
-      )}
-      {" "}
-      ({codes})
-    </Warning>
-  );
+function shortName(source: SourceView): string {
+  if (source.id === "ingv-fdsn") return "INGV";
+  if (source.mode === "synthetic_local") return "Demo";
+  return source.label.split(" (")[0] ?? source.label;
 }
