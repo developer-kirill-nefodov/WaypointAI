@@ -75,6 +75,8 @@ export interface Dataset {
   id: string; label: string; kind: "places" | "events"; mode: string; license: string | null; attribution: string | null; sourceUrl: string | null;
   snapshotDate: string | null; places: number; events: number; bbox: [number, number, number, number] | null; countries: string[];
   lastImportAt: string | null; deletable: boolean;
+  /** Events that another catalogue also reports. */
+  matchedEvents: number;
 }
 
 export interface CountryCoverage { countryCode: string; places: number; cities: number; towns: number; villages: number; datasets: string[] }

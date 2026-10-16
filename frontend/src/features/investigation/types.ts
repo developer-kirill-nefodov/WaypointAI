@@ -24,4 +24,6 @@ export type EventFilterState = {
   minMagnitude: number | null;
   sourceIds: string[];
   near: NearFilter | null;
+  /** Only events another catalogue confirms. */
+  confirmedOnly?: boolean;
 };

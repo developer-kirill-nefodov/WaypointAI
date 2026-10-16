@@ -21,18 +21,20 @@ export interface DatasetView {
   lastImportAt: string | null;
   /** Only datasets imported from the app can be deleted; the built-in extracts and event sources cannot. */
   deletable: boolean;
+  /** Events that another catalogue also reports (see record_matches). */
+  matchedEvents: number;
 }
 
 type DatasetRow = {
   id: string; label: string; mode: string; license: string | null; attribution: string | null; source_url: string | null; snapshot_date: string | Date | null;
-  places: string | number | null; events: string | number | null; min_lon: number | null; min_lat: number | null; max_lon: number | null; max_lat: number | null; last_import_at: Date | null; countries: string[] | null;
+  places: string | number | null; events: string | number | null; min_lon: number | null; min_lat: number | null; max_lon: number | null; max_lat: number | null; last_import_at: Date | null; countries: string[] | null; matched_events: string | number | null;
 };
 
 /** Datasets with counts; place counts scan the places table, so callers cache the result. */
 export async function listDatasets(): Promise<DatasetView[]> {
   const [rows] = await database.query(`
     SELECT s.id, s.label, s.mode, s.license, s.attribution, s.source_url, s.snapshot_date,
-           p.places, p.min_lon, p.min_lat, p.max_lon, p.max_lat, p.countries, r.events, runs.last_import_at
+           p.places, p.min_lon, p.min_lat, p.max_lon, p.max_lat, p.countries, r.events, runs.last_import_at, matched.matched_events
     FROM data_sources s
     LEFT JOIN (SELECT source_id, sum(n) AS places, min(min_lon) AS min_lon, min(min_lat) AS min_lat, max(max_lon) AS max_lon, max(max_lat) AS max_lat,
                       array_agg(country_code ORDER BY n DESC) FILTER (WHERE country_code IS NOT NULL) AS countries
@@ -41,6 +43,8 @@ export async function listDatasets(): Promise<DatasetView[]> {
                GROUP BY source_id) p ON p.source_id = s.id
     LEFT JOIN (SELECT source_id, count(*) AS events FROM records GROUP BY source_id) r ON r.source_id = s.id
     LEFT JOIN (SELECT source_id, max(finished_at) AS last_import_at FROM source_sync_runs WHERE status = 'succeeded' GROUP BY source_id) runs ON runs.source_id = s.id
+    LEFT JOIN (SELECT r.source_id, count(DISTINCT r.id) AS matched_events FROM record_matches m
+               JOIN records r ON r.id = m.record_id OR r.id = m.matched_record_id GROUP BY r.source_id) matched ON matched.source_id = s.id
     -- A deleted dataset keeps its row for the import history, marked unavailable.
     WHERE s.status = 'ready'
     ORDER BY s.mode, s.label`);
@@ -65,6 +69,7 @@ export async function listDatasets(): Promise<DatasetView[]> {
       countries: row.countries ?? [],
       lastImportAt: row.last_import_at ? new Date(row.last_import_at).toISOString() : null,
       deletable: isDeletableDataset(row.id),
+      matchedEvents: Number(row.matched_events ?? 0),
     };
   });
 }

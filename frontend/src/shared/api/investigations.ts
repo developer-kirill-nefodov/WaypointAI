@@ -28,6 +28,8 @@ export type EventQuery = {
   minMagnitude: number | null;
   sourceIds: string[];
   near: { lat: number; lon: number; radiusKm: number } | null;
+  /** Only events another catalogue confirms. */
+  confirmedOnly?: boolean;
   limit: number;
   cursor?: string | null;
 };
@@ -44,6 +46,9 @@ export function eventQueryParams(query: EventQuery, now = new Date()): URLSearch
     params.set("lon", query.near.lon.toFixed(5));
     params.set("radiusKm", String(query.near.radiusKm));
   }
+  if (query.confirmedOnly) params.set("crossCheck", "confirmed");
+  // An earthquake reported by several catalogues is listed once; its other copies are in crossCheck.
+  params.set("merge", "true");
   if (query.cursor) params.set("cursor", query.cursor);
   return params;
 }
@@ -73,6 +78,8 @@ export function paramsFromAppliedFilters(filters: AppliedEventFilters): URLSearc
   if (filters.maxMagnitude !== undefined) params.set("maxMagnitude", String(filters.maxMagnitude));
   if (filters.sourceIds?.length) params.set("sourceIds", filters.sourceIds.join(","));
   if (filters.category) params.set("category", filters.category);
+  if (filters.crossCheck) params.set("crossCheck", filters.crossCheck);
+  if (filters.merge) params.set("merge", "true");
   return params;
 }
 

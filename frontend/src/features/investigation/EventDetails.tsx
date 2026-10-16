@@ -13,6 +13,7 @@ import {
 } from "./format";
 import type { MapFocusTarget } from "./types";
 import Warning from "./Warning";
+import { CrossCheckSection } from "./CrossCheck";
 
 const RADIUS_OPTIONS = [10, 25, 50, 100];
 
@@ -86,6 +87,8 @@ export default function EventDetails({
           </button>
         )}
       </div>
+
+      {details.crossCheck && <CrossCheckSection language={language} details={details} onShowOnMap={onShowOnMap} />}
 
       <div className="investigation-pivot">
         <Crosshair size={13} />

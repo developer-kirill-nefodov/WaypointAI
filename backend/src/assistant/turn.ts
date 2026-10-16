@@ -4,6 +4,7 @@ import { getPlaceDetails, getPlacesByIds, getRecordDetails, getSources, searchNe
 import { ALLOWED_TOOLS } from "../tools/allowlist.js";
 import { assistantToolDefinitions, executeAssistantTool, type SearchArea, type ToolExecutionResult } from "../tools/assistant-tools.js";
 import { formatPlaceResultsMessage } from "./place-results-message.js";
+import { CitationRegistry, stripCitationRefs } from "./citations.js";
 import { chat, OllamaUnavailableError, type ChatMessage, type ChatOptions, type ToolDefinition } from "../llm/ollama.provider.js";
 
 /** A tool call needs well under this many tokens; a plain-text first answer is cut here and retried. */
@@ -60,6 +61,8 @@ export async function processTurn(
   let listedSourceIds: string[] = [];
   let lastTool: ToolName | undefined;
   let toolCallsExecuted = 0;
+  // Refs (E1, P1) for the rows the model sees, so the answer can cite them and the server can check each citation.
+  const citations = new CitationRegistry();
   const allowedSourceIds = frame.scope.sourceIds?.slice(0, 20);
   const workspaceId = frame.scope.workspaceId ?? "demo";
   let messages: ChatMessage[] = [];
@@ -206,7 +209,7 @@ export async function processTurn(
         // no tool returned, so it is not shown. Text after tool results is the normal final answer.
         // After an empty place search the model may answer in text; the answer still comes from the search.
         if (lastPlaceSearch && !usedOtherDataTool) {
-          finalText = formatPlaceResultsMessage(lastPlaceSearch.search, lastPlaceSearch.places, lastPlaceSearch.total, language);
+          finalText = formatPlaceResultsMessage(lastPlaceSearch.search, lastPlaceSearch.places, lastPlaceSearch.total, language, (place) => citations.citePlace(place));
           messages.splice(messages.length - 1, 1, { role: "assistant", content: finalText.split("\n\n")[0]! });
           finished = true;
           break;
@@ -284,7 +287,7 @@ export async function processTurn(
           frame.message,
         );
         toolDurationMs += Math.round(performance.now() - toolStartedAt);
-        messages.push({ role: "tool", tool_name: toolName, content: JSON.stringify(result.content) });
+        messages.push({ role: "tool", tool_name: toolName, content: JSON.stringify(citations.annotate(result.content, result)) });
         if (result.records) {
           found = result.records;
           totalRecords = result.totalRecords ?? result.records.length;
@@ -306,7 +309,7 @@ export async function processTurn(
       // Place results are listed from the rows as well, so the answer cannot name places the search did not return.
       // An empty first search goes back to the model once, which can retry with another spelling or kind.
       if (lastPlaceSearch && !usedOtherDataTool && (lastPlaceSearch.places.length || iteration > 0)) {
-        finalText = formatPlaceResultsMessage(lastPlaceSearch.search, lastPlaceSearch.places, lastPlaceSearch.total, language);
+        finalText = formatPlaceResultsMessage(lastPlaceSearch.search, lastPlaceSearch.places, lastPlaceSearch.total, language, (place) => citations.citePlace(place));
         placesFound = lastPlaceSearch.places;
         totalPlaces = lastPlaceSearch.total;
         messages.push({ role: "assistant", content: finalText.split("\n\n")[0]! + (lastPlaceSearch.places.length ? ` ${lastPlaceSearch.places.map((place) => place.name).join("; ")}` : "") });
@@ -361,6 +364,8 @@ export async function processTurn(
       return;
     }
     if (!finalText) throw new Error("Model did not produce a final response");
+    const cited = citations.resolve(finalText);
+    finalText = cited.text;
     emit({ protocolVersion: 1, type: "turn.status", requestId: frame.requestId, phase: "composing", label: text(language, "Формирую ответ", "Writing the answer") });
     // A follow-up that searched nothing keeps the current plan on the map.
     const keepPlan = editablePlan && !found.length && !placesFound.length && !searchArea ? editablePlan : null;
@@ -373,7 +378,7 @@ export async function processTurn(
     const allSourceIds = [...new Set([...sourceIds, ...placesFound.map((place) => place.sourceId), ...listedSourceIds])];
     const sources = await getSources(allSourceIds);
     // The final model reply is already in `messages` from the loop; pushing it again stored every answer twice.
-    await saveConversationTurn(conversationId, workspaceId, messages);
+    await saveConversationTurn(conversationId, workspaceId, messages.map((message) => message.role === "assistant" ? { ...message, content: stripCitationRefs(message.content) } : message));
     turnOutcome = "completed";
     if (!streamed) emitSections(finalText);
     const mapFeatures = {
@@ -396,7 +401,8 @@ export async function processTurn(
         ...(tripPlan ? { tripPlan } : {}),
         ...(searchArea ? { searchArea } : {}),
         mapFeatures,
-      }, sources
+      }, sources,
+      ...(cited.citations.length ? { citations: cited.citations, citationsMode: cited.citationsMode } : {}),
     });
   } catch (error) {
     if (signal.aborted) {
@@ -506,6 +512,6 @@ function toolStepLabel(tool: ToolName, rawArgs: unknown, language: "en" | "ru" |
 /** Prompt for writing an answer that needs no data: what the app can do, and the trip plan if one is shown. */
 function replyPrompt(language: "en" | "ru" | "de", plan: string | null, coverage: string): string {
   return `You are Waypoint AI, a local map assistant. Answer the user's last message in ${language === "ru" ? "Russian" : language === "de" ? "German" : "English"} in at most four short sentences of plain text. Do not call or name tools and do not write code or JSON.
-What the app can do: find places and sights in the local OpenStreetMap snapshots (${coverage}); build and edit multi-day trip plans with a driving route per day; search imported INGV earthquakes by place, radius, period, and magnitude; describe the data sources.
+What the app can do: find places and sights in the local OpenStreetMap snapshots (${coverage}); build and edit multi-day trip plans with a driving route per day; search imported INGV and USGS earthquakes by place, radius, period, and magnitude, and say whether the two catalogues agree; describe the data sources.
 Use only facts from this conversation${plan ? " and the trip plan below" : ""}; never name places, events, or numbers that are not there.${plan ? `\nCurrent trip plan: ${plan}` : ""}`;
 }

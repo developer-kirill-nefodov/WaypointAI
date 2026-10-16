@@ -1,6 +1,7 @@
 import type { Scope } from "@waypoint-ai/shared";
 import { buildEventSearch, complementFromText, dropNonSettlementPlace, resolveSearchCenter, type GeoPoint } from "../assistant/event-search.js";
 import { searchEvents } from "../data/investigation.repository.js";
+import { EVENT_MERGE_PRIORITY } from "../api/investigation-params.js";
 import { getSources } from "../data/record.repository.js";
 import { resolveSettlement } from "../data/settlement.repository.js";
 import { normalizeToolArguments, searchEventsArgsSchema } from "./search-events.js";
@@ -43,7 +44,8 @@ export async function executeSearchEventsTool(rawArgs: unknown, context: SearchE
     return { content: { error: center.error, place: args.place ?? null, hint }, resultsFound: 0 };
   }
 
-  const search = narrowToScope(buildEventSearch(args, center.point, context.now ?? new Date()), context);
+  // An earthquake in several catalogues is counted once; each row says which other catalogues confirm it.
+  const search = { ...narrowToScope(buildEventSearch(args, center.point, context.now ?? new Date()), context), mergePriority: EVENT_MERGE_PRIORITY };
   if (search.from > search.to) return { content: { total: 0, events: [], note: "The selected date range excludes this period." }, records: [], totalRecords: 0, resultsFound: 0 };
 
   const result = await deps.searchEvents(search);
@@ -71,6 +73,7 @@ export async function executeSearchEventsTool(rawArgs: unknown, context: SearchE
       },
       ...(result.magnitudeRange ? { magnitudeRangeOfAllMatches: result.magnitudeRange } : {}),
       syntheticEventsOnThisPage: result.events.filter((event) => isSynthetic(event.sourceId)).length,
+      ...crossCheckCounts(result.events),
       // The model sees a few rows; it must not describe them as the whole result.
       eventsBelowAreASample: result.total > EVENTS_FOR_MODEL
         ? `Only the ${EVENTS_FOR_MODEL} most recent of ${result.total} matches are listed. Use total and magnitudeRangeOfAllMatches for the whole result.`
@@ -82,6 +85,7 @@ export async function executeSearchEventsTool(rawArgs: unknown, context: SearchE
         magnitude: event.attributes.magnitude ?? null,
         placeDescription: event.attributes.placeDescription ?? event.label,
         ...(isSynthetic(event.sourceId) ? { synthetic: true } : {}),
+        ...(event.crossCheck && event.crossCheck.status !== "unchecked" ? { crossCheck: event.crossCheck.status, ...(event.crossCheck.matchedSourceIds.length ? { alsoReportedBy: event.crossCheck.matchedSourceIds } : {}) } : {}),
         ...(event.distanceMeters !== undefined ? { distanceKm: Math.round(event.distanceMeters / 100) / 10 } : {}),
         ...(search.near ? { directionFromCenter: compassDirection(search.near, event) } : {}),
       })),
@@ -105,6 +109,19 @@ function narrowToScope<T extends { from: Date; to: Date; sourceIds?: string[]; c
     ...(context.sourceIds?.length ? { sourceIds: context.sourceIds } : {}),
     ...(scopeCategory ? { category: scopeCategory } : {}),
   };
+}
+
+/**
+ * How many listed events another catalogue confirms or contradicts. Omitted when nothing was compared, so the model
+ * does not claim a confirmation that was never checked.
+ */
+function crossCheckCounts(events: Array<{ crossCheck?: { status: string } }>) {
+  const counts = { confirmed: 0, conflict: 0, single: 0 };
+  for (const event of events) {
+    const status = event.crossCheck?.status;
+    if (status === "confirmed" || status === "conflict" || status === "single") counts[status] += 1;
+  }
+  return counts.confirmed + counts.conflict + counts.single ? { crossCheckOnThisPage: counts } : {};
 }
 
 const COMPASS = ["N", "NE", "E", "SE", "S", "SW", "W", "NW"] as const;

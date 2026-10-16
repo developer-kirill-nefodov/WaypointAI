@@ -561,6 +561,8 @@ export interface components {
             lastImportAt: string | null;
             /** @description Only datasets imported from the app can be deleted. */
             deletable: boolean;
+            /** @description Events that another catalogue also reports (cross-check). */
+            matchedEvents: number;
         };
         CountryCoverage: {
             countryCode: string;
@@ -709,6 +711,24 @@ export interface components {
             attributes: {
                 [key: string]: unknown;
             };
+            /** @description Present in search results. */
+            crossCheck?: components["schemas"]["CrossCheckSummary"];
+        };
+        /** @description How the event compares with other live catalogues (INGV, USGS). Matches are computed at import: another catalogue's event within 30 s and 50 km. confirmed = reported elsewhere and magnitude (within 0.5) and depth (within 10 km or 10%) agree; conflict = reported elsewhere but they differ; single = another catalogue was imported for that time but does not report it (USGS rarely lists events below about M2.5 in Europe); unchecked = no other catalogue covers that time, or the event is synthetic. */
+        CrossCheckSummary: {
+            /** @enum {string} */
+            status: "confirmed" | "conflict" | "single" | "unchecked";
+            matchedSourceIds: string[];
+            /** @description Other live sources whose successful imports cover the event's time. */
+            checkedSourceIds: string[];
+        };
+        CrossCheckMatch: {
+            event: components["schemas"]["InvestigationEvent"];
+            timeDeltaMs: number;
+            distanceMeters: number;
+            magnitudeDelta: number | null;
+            depthDeltaKm: number | null;
+            consistent: boolean;
         };
         AppliedEventFilters: {
             /** Format: date-time */
@@ -725,6 +745,9 @@ export interface components {
             maxMagnitude?: number;
             sourceIds?: string[];
             category?: string;
+            /** @enum {string} */
+            crossCheck?: "confirmed" | "conflict";
+            merge?: boolean;
             limit: number;
         };
         EventSearchResponse: {
@@ -754,6 +777,9 @@ export interface components {
         };
         EventDetailsResponse: {
             event: components["schemas"]["InvestigationEvent"];
+            crossCheck: components["schemas"]["CrossCheckSummary"] & {
+                matches: components["schemas"]["CrossCheckMatch"][];
+            };
             linkedPlaces: components["schemas"]["LinkedPlace"][];
             sources: components["schemas"]["DataSource"][];
             lastSync: components["schemas"]["SyncSummary"] | null;
@@ -1042,6 +1068,10 @@ export interface operations {
                 limit?: number;
                 /** @description Opaque value from a previous nextCursor. */
                 cursor?: string;
+                /** @description true lists an earthquake reported by several catalogues once, preferring INGV over USGS; the other copy is in crossCheck. */
+                merge?: "true" | "false";
+                /** @description Only events another catalogue confirms (confirmed) or describes differently (conflict). */
+                crossCheck?: "confirmed" | "conflict";
             };
             header?: never;
             path?: never;
@@ -1165,7 +1195,7 @@ export interface operations {
             query?: never;
             header?: never;
             path: {
-                sourceId: "ingv-fdsn" | "demo-seismic-synthetic";
+                sourceId: "ingv-fdsn" | "usgs-fdsn" | "demo-seismic-synthetic";
             };
             cookie?: never;
         };
@@ -1306,7 +1336,7 @@ export interface operations {
                 "application/json": {
                     /** @constant */
                     kind?: "events";
-                    sourceIds: ("ingv-fdsn" | "demo-seismic-synthetic")[];
+                    sourceIds: ("ingv-fdsn" | "usgs-fdsn" | "demo-seismic-synthetic")[];
                     /** @default 7 */
                     days?: number;
                     /** @default demo */

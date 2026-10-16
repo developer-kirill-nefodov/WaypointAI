@@ -4,6 +4,7 @@ import type { ImportJob, OsmAreaCategory } from "@waypoint-ai/shared";
 /** Event sources that can be imported from the app, in the order the dialog lists them. */
 export const IMPORT_SOURCES = [
   { id: "ingv-fdsn", label: "INGV", license: "CC BY 4.0" },
+  { id: "usgs-fdsn", label: "USGS", license: "Public domain" },
   { id: "demo-seismic-synthetic", label: "Synthetic demo", license: "CC0-1.0" },
 ] as const;
 export const IMPORT_DAY_OPTIONS = [1, 3, 7, 14, 30] as const;

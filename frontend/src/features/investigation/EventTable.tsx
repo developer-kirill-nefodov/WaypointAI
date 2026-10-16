@@ -1,6 +1,7 @@
 import type { InvestigationEvent, SourceView } from "@waypoint-ai/shared";
 import type { MouseEvent, ReactNode } from "react";
 import { makeT, type Language } from "../../shared/i18n";
+import { CrossCheckBadge } from "./CrossCheck";
 import { formatDistance, formatEventTime, formatUtc, numberAttribute, textAttribute } from "./format";
 
 type EventTableProps = {
@@ -91,6 +92,7 @@ function EventRow({ language, event, source, selected, showDistance, onSelect }:
       {showDistance && <td>{distance}</td>}
       <td>
         <span className={`investigation-source-tag${flagged ? " synthetic" : ""}`}>{sourceTag}</span>
+        <CrossCheckBadge language={language} crossCheck={event.crossCheck} />
       </td>
     </tr>
   );

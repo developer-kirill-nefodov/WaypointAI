@@ -46,6 +46,7 @@ export default function DataStatus({ language, sources, state }: DataStatusProps
 
 function shortName(source: SourceView): string {
   if (source.id === "ingv-fdsn") return "INGV";
+  if (source.id === "usgs-fdsn") return "USGS";
   if (source.mode === "synthetic_local") return "Demo";
   return source.label.split(" (")[0] ?? source.label;
 }

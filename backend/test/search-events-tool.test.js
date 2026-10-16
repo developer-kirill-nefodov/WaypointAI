@@ -129,3 +129,17 @@ test("computes the compass direction from the search center for the model", asyn
   assert.equal(compassDirection(perugia, { lat: 43.5, lon: 12.39 }), "N");
   assert.equal(compassDirection(perugia, { lat: 43.11, lon: 11.9 }), "W");
 });
+
+test("counts an earthquake in several catalogues once and tells the model which catalogues confirm each event", async () => {
+  const confirmed = { ...event, id: "live:1", sourceId: "live", crossCheck: { status: "confirmed", matchedSourceIds: ["other-live"], checkedSourceIds: ["other-live"] } };
+  const unchecked = { ...event, id: "live:2", sourceId: "live", crossCheck: { status: "unchecked", matchedSourceIds: [], checkedSourceIds: [] } };
+  const ctx = context();
+  ctx.value.deps.searchEvents = async (input) => { ctx.searches.push(input); return { total: 2, events: [confirmed, unchecked], nextCursor: null }; };
+  const result = await executeSearchEventsTool({ place: "Testville" }, ctx.value);
+  assert.deepEqual(ctx.searches[0].mergePriority, ["ingv-fdsn", "usgs-fdsn"]);
+  assert.equal(result.content.events[0].crossCheck, "confirmed");
+  assert.deepEqual(result.content.events[0].alsoReportedBy, ["other-live"]);
+  // An event nothing was compared with carries no claim either way.
+  assert.equal(result.content.events[1].crossCheck, undefined);
+  assert.deepEqual(result.content.crossCheckOnThisPage, { confirmed: 1, conflict: 0, single: 0 });
+});

@@ -541,3 +541,47 @@
 .selected-item-actions{display:flex;justify-content:flex-end;margin-top:10px;padding-top:9px;border-top:1px solid #2c4140}
 .map-canvas .route-summary~.selected-item-card,.map-canvas .selected-item-card{margin:0}
 @media(max-width:560px){.map-canvas .selected-item-card{left:8px;right:8px;bottom:8px;width:auto;max-height:60%}}
+
+/* Citations: verified refs in an answer and the rows behind it. */
+.citation-chip{display:inline-flex;align-items:center;min-height:18px;margin:0 1px;padding:0 5px;border:1px solid #3d5a55;border-radius:6px;background:#1b302d;color:#9fe0bd;font:inherit;font-size:10px;font-weight:700;line-height:1.5;vertical-align:1px;cursor:pointer}
+.citation-chip:hover{border-color:#75cda2;color:#effff6}
+.citation-chip:focus-visible,.citation-list summary:focus-visible,.citation-actions :is(a,button):focus-visible{outline:2px solid var(--mint);outline-offset:2px}
+.citation-list{min-width:0;border:1px solid #2b3b3f;border-radius:10px;background:#152126;font-size:11px}
+.citation-list summary{display:flex;align-items:center;gap:6px;padding:7px 10px;color:#a8c2b7;font-weight:700;cursor:pointer}
+.citation-count{padding:0 6px;border-radius:8px;background:#22363a;color:#cfe4dc;font-size:10px}
+.citation-note{margin:0;padding:0 10px 6px;color:#849794;line-height:1.45}
+.citation-list ul{display:grid;gap:2px;margin:0;padding:0 6px 6px;list-style:none}
+.citation-list li{display:grid;grid-template-columns:auto minmax(0,1fr) auto;align-items:center;gap:8px;padding:5px 4px;border-top:1px solid #22323a}
+.citation-ref{min-width:26px;color:#9fe0bd;font-weight:700;text-align:center}
+.citation-copy{display:grid;min-width:0}
+.citation-copy strong{overflow:hidden;color:#d7e8e0;font-weight:600;text-overflow:ellipsis;white-space:nowrap}
+.citation-copy small{overflow:hidden;color:#849794;font-size:10px;text-overflow:ellipsis;white-space:nowrap}
+.citation-actions{display:flex;gap:4px}
+.citation-actions :is(a,button){display:grid;place-items:center;width:26px;height:26px;border:1px solid #34484b;border-radius:7px;background:transparent;color:#a8c2b7;cursor:pointer}
+.citation-actions :is(a,button):hover{border-color:#75cda2;color:#effff6}
+.investigation-toggle{display:flex;align-items:center;gap:7px;color:#a8bcb7;font-size:10px;cursor:pointer}
+.investigation-toggle input{accent-color:#75cda2}
+
+/* Cross-check between event catalogues. */
+.cross-check-badge{display:inline-flex;align-items:center;gap:3px;margin-left:4px;padding:1px 5px;border-radius:6px;font-size:9px;font-weight:700;white-space:nowrap;vertical-align:middle}
+.cross-check-badge.confirmed{background:#1b3a2e;color:#8fe0b5}
+.cross-check-badge.conflict{background:#3d3218;color:#f2c76b}
+.cross-check{display:grid;gap:7px;margin-top:12px;padding:10px;border:1px solid #2b3b3f;border-radius:10px;background:#152126}
+.cross-check.confirmed{border-color:#2f5a48}
+.cross-check.conflict{border-color:#6a5524}
+.cross-check h4{display:flex;align-items:center;gap:6px;margin:0}
+.cross-check.confirmed h4 svg{color:#8fe0b5}
+.cross-check.conflict h4 svg{color:#f2c76b}
+.cross-check-table-wrap{overflow-x:auto}
+.cross-check-table{width:100%;border-collapse:collapse;font-size:10px;font-variant-numeric:tabular-nums}
+.cross-check-table th,.cross-check-table td{padding:5px 6px;border-top:1px solid #22323a;text-align:left;vertical-align:top}
+.cross-check-table thead th{border-top:0;color:#a8c2b7;font-weight:700}
+.cross-check-table tbody th{color:#849794;font-weight:600;white-space:nowrap}
+.cross-check-table td{color:#d7e8e0}
+.cross-check-table td.differs{color:#f2c76b}
+.cross-check-delta{display:block;color:#849794;font-size:9px}
+.cross-check-table td.differs .cross-check-delta{color:#d9b25c}
+.cross-check-links{display:flex;flex-wrap:wrap;align-items:center;gap:8px;font-size:10px}
+.cross-check-links button,.cross-check-links a{display:inline-flex;align-items:center;gap:4px;padding:4px 8px;border:1px solid #34484b;border-radius:7px;background:transparent;color:#a8c2b7;font:inherit;text-decoration:none;cursor:pointer}
+.cross-check-links :is(button,a):hover{border-color:#75cda2;color:#effff6}
+.cross-check-links small{flex-basis:100%;color:#6f817e;font-size:9px}

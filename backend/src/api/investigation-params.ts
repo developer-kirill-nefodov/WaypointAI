@@ -4,6 +4,11 @@ import type { EventCursor, EventSearchInput } from "../data/investigation.reposi
 import { DEFAULT_IMPORT_DAYS, MAX_IMPORT_DAYS } from "../services/event-import.js";
 import { isValidBbox, type Bbox } from "../services/geometry.js";
 import { DAY_MS } from "../services/time.js";
+import { INGV_SOURCE_ID } from "../sources/ingv/ingv.adapter.js";
+import { USGS_SOURCE_ID } from "../sources/usgs/usgs.adapter.js";
+
+/** When one earthquake is in several catalogues, the regional one (more precise for Italy) is listed. */
+export const EVENT_MERGE_PRIORITY = [INGV_SOURCE_ID, USGS_SOURCE_ID];
 
 const { radiusKm, magnitude, windowDays, eventPageLimit, maxSourceIds } = SEARCH_LIMITS;
 /** Linked events shown on one place's details. */
@@ -28,6 +33,9 @@ const eventQuerySchema = z.object({
   category: z.string().trim().min(1).max(120).optional(),
   limit: z.coerce.number().int().min(1).max(eventPageLimit.max).default(eventPageLimit.default),
   cursor: z.string().max(300).optional(),
+  /** "true" lists an earthquake reported by several catalogues once. */
+  merge: z.enum(["true", "false"]).optional(),
+  crossCheck: z.enum(["confirmed", "conflict"]).optional(),
 }).strict();
 
 type EventQuery = z.infer<typeof eventQuerySchema>;
@@ -79,6 +87,8 @@ export function parseEventSearchQuery(query: unknown, now = new Date()): ParseRe
       maxMagnitude: value.maxMagnitude,
       sourceIds: parseSourceIds(value.sourceIds),
       category: value.category,
+      ...(value.crossCheck ? { crossCheck: value.crossCheck } : {}),
+      ...(value.merge === "true" ? { mergePriority: EVENT_MERGE_PRIORITY } : {}),
       limit: value.limit,
       cursor,
     },
@@ -111,6 +121,8 @@ export function describeAppliedFilters(input: EventSearchInput) {
     ...(input.maxMagnitude !== undefined ? { maxMagnitude: input.maxMagnitude } : {}),
     ...(input.sourceIds?.length ? { sourceIds: input.sourceIds } : {}),
     ...(input.category ? { category: input.category } : {}),
+    ...(input.crossCheck ? { crossCheck: input.crossCheck } : {}),
+    ...(input.mergePriority?.length ? { merge: true } : {}),
     limit: input.limit,
   };
 }

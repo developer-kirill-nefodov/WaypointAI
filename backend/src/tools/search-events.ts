@@ -32,7 +32,7 @@ export const searchEventsToolDefinition: ToolDefinition = {
   type: "function",
   function: {
     name: SEARCH_EVENTS_TOOL,
-    description: "Search imported seismic events. Every argument is optional; omit what the user did not ask for.",
+    description: "Search imported earthquakes (INGV and USGS, merged and cross-checked) by place, radius, period, and magnitude. Every argument is optional; omit what the user did not ask for. Without place or nearSelection it searches the whole imported area.",
     parameters: {
       type: "object",
       additionalProperties: false,

@@ -165,6 +165,8 @@ paths:
         - { name: category, in: query, description: 'Exact category, for example seismic:earthquake.', schema: { type: string, maxLength: 120 } }
         - { name: limit, in: query, schema: { type: integer, minimum: 1, maximum: 200, default: 50 } }
         - { name: cursor, in: query, description: Opaque value from a previous nextCursor., schema: { type: string, maxLength: 300 } }
+        - { name: merge, in: query, description: 'true lists an earthquake reported by several catalogues once, preferring INGV over USGS; the other copy is in crossCheck.', schema: { type: string, enum: ['true', 'false'] } }
+        - { name: crossCheck, in: query, description: 'Only events another catalogue confirms (confirmed) or describes differently (conflict).', schema: { type: string, enum: [confirmed, conflict] } }
       responses:
         '200':
           description: One page of events with the applied filters and source provenance.
@@ -228,7 +230,7 @@ paths:
         trigger is off by default; use `npm run data:import:events` instead. One import per source runs
         at a time, and a cooldown applies between imports.
       parameters:
-        - { name: sourceId, in: path, required: true, schema: { type: string, enum: [ingv-fdsn, demo-seismic-synthetic] } }
+        - { name: sourceId, in: path, required: true, schema: { type: string, enum: [ingv-fdsn, usgs-fdsn, demo-seismic-synthetic] } }
       requestBody:
         required: false
         content:
@@ -314,7 +316,7 @@ paths:
                   required: [sourceIds]
                   properties:
                     kind: { const: events }
-                    sourceIds: { type: array, minItems: 1, uniqueItems: true, items: { type: string, enum: [ingv-fdsn, demo-seismic-synthetic] } }
+                    sourceIds: { type: array, minItems: 1, uniqueItems: true, items: { type: string, enum: [ingv-fdsn, usgs-fdsn, demo-seismic-synthetic] } }
                     days: { type: integer, minimum: 1, maximum: 30, default: 7 }
                     workspaceId: { type: string, pattern: '^[\w.-]{1,120}$', default: demo }
                 - type: object
@@ -832,7 +834,7 @@ components:
       enum: [attraction, museum, gallery, viewpoint, monument, castle, church, theatre, park, restaurant, cafe, bar, hotel, transport]
     Dataset:
       type: object
-      required: [id, label, kind, mode, license, attribution, sourceUrl, snapshotDate, places, events, bbox, countries, lastImportAt, deletable]
+      required: [id, label, kind, mode, license, attribution, sourceUrl, snapshotDate, places, events, bbox, countries, lastImportAt, deletable, matchedEvents]
       properties:
         id: { type: string }
         label: { type: string }
@@ -848,6 +850,7 @@ components:
         countries: { type: array, items: { type: string }, description: Country codes of the places, most places first. }
         lastImportAt: { type: [string, 'null'], format: date-time }
         deletable: { type: boolean, description: Only datasets imported from the app can be deleted. }
+        matchedEvents: { type: integer, minimum: 0, description: Events that another catalogue also reports (cross-check). }
     CountryCoverage:
       type: object
       required: [countryCode, places, cities, towns, villages, datasets]
@@ -994,6 +997,32 @@ components:
           type: object
           description: Source-specific fields. Seismic events include category, magnitude, magnitudeType, depthKm, placeDescription, author, and sourceEventUrl.
           additionalProperties: true
+        crossCheck:
+          $ref: '#/components/schemas/CrossCheckSummary'
+          description: Present in search results.
+    CrossCheckSummary:
+      type: object
+      description: >-
+        How the event compares with other live catalogues (INGV, USGS). Matches are computed at import: another
+        catalogue's event within 30 s and 50 km. confirmed = reported elsewhere and magnitude (within 0.5) and depth
+        (within 10 km or 10%) agree; conflict = reported elsewhere but they differ; single = another catalogue was
+        imported for that time but does not report it (USGS rarely lists events below about M2.5 in Europe);
+        unchecked = no other catalogue covers that time, or the event is synthetic.
+      required: [status, matchedSourceIds, checkedSourceIds]
+      properties:
+        status: { type: string, enum: [confirmed, conflict, single, unchecked] }
+        matchedSourceIds: { type: array, items: { type: string } }
+        checkedSourceIds: { type: array, items: { type: string }, description: Other live sources whose successful imports cover the event's time. }
+    CrossCheckMatch:
+      type: object
+      required: [event, timeDeltaMs, distanceMeters, magnitudeDelta, depthDeltaKm, consistent]
+      properties:
+        event: { $ref: '#/components/schemas/InvestigationEvent' }
+        timeDeltaMs: { type: integer, minimum: 0 }
+        distanceMeters: { type: integer, minimum: 0 }
+        magnitudeDelta: { type: [number, 'null'], minimum: 0 }
+        depthDeltaKm: { type: [number, 'null'], minimum: 0 }
+        consistent: { type: boolean }
     AppliedEventFilters:
       type: object
       required: [from, to, limit]
@@ -1016,6 +1045,8 @@ components:
         maxMagnitude: { type: number }
         sourceIds: { type: array, items: { type: string } }
         category: { type: string }
+        crossCheck: { type: string, enum: [confirmed, conflict] }
+        merge: { type: boolean }
         limit: { type: integer }
     EventSearchResponse:
       type: object
@@ -1052,9 +1083,16 @@ components:
         place: { $ref: '#/components/schemas/Place' }
     EventDetailsResponse:
       type: object
-      required: [event, linkedPlaces, sources, lastSync]
+      required: [event, linkedPlaces, sources, lastSync, crossCheck]
       properties:
         event: { $ref: '#/components/schemas/InvestigationEvent' }
+        crossCheck:
+          allOf:
+            - $ref: '#/components/schemas/CrossCheckSummary'
+            - type: object
+              required: [matches]
+              properties:
+                matches: { type: array, items: { $ref: '#/components/schemas/CrossCheckMatch' } }
         linkedPlaces:
           type: array
           maxItems: 20

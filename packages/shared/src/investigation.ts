@@ -13,3 +13,5 @@ export type InvestigationQueryRequest = Schemas["InvestigationQueryRequest"];
 export type InvestigationQueryResponse = Schemas["InvestigationQueryResponse"];
 export type InvestigationQueryError = Schemas["InvestigationQueryError"];
 export type QueryInterpretation = Schemas["QueryInterpretation"];
+export type CrossCheckSummary = Schemas["CrossCheckSummary"];
+export type CrossCheckMatch = Schemas["CrossCheckMatch"];

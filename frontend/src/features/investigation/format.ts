@@ -55,7 +55,17 @@ export function textAttribute(event: InvestigationEvent, key: string): string | 
 /** Only links to the source's own event pages are rendered, never arbitrary URLs from data. */
 export function safeSourceEventUrl(event: InvestigationEvent): string | null {
   const url = textAttribute(event, "sourceEventUrl");
-  return url && /^https:\/\/terremoti\.ingv\.it\/en\/event\/\d+$/.test(url) ? url : null;
+  return url && SOURCE_EVENT_PAGE.test(url) ? url : null;
+}
+
+/** Event pages of the live catalogues: INGV by numeric ID, USGS by network and event code. */
+const SOURCE_EVENT_PAGE = /^https:\/\/(?:terremoti\.ingv\.it\/en\/event\/\d+|earthquake\.usgs\.gov\/earthquakes\/eventpage\/[a-z0-9]{2,40})$/;
+
+/** Short catalogue name for badges and comparison columns. */
+export function sourceShortName(sourceId: string, source?: SourceView): string {
+  if (sourceId === "ingv-fdsn") return "INGV";
+  if (sourceId === "usgs-fdsn") return "USGS";
+  return source?.label.split(" (")[0] ?? sourceId;
 }
 
 export function isEventSource(source: SourceView): boolean {

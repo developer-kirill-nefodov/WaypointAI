@@ -1,6 +1,6 @@
 import { Fragment, lazy, Suspense, useCallback, useEffect, useRef, useState, type FormEvent, type KeyboardEvent as ReactKeyboardEvent } from "react";
 import { Activity, ArrowUp, ArrowUpRight, BrainCircuit, ChevronDown, Clock3, Database, House, Layers3, MapPin, MapPinned, MessageSquare, MoreHorizontal, Plus, RefreshCw, SlidersHorizontal, Sparkles, Square, Trash2 } from "lucide-react";
-import type { PlaceView, RecordView, Scope, ServerFrame, SourceView, TripPlan, SearchArea } from "@waypoint-ai/shared";
+import type { Citation, PlaceView, RecordView, Scope, ServerFrame, SourceView, TripPlan, SearchArea } from "@waypoint-ai/shared";
 import MapPanel, { type MapLayers } from "../../widgets/map/MapPanel";
 import { EMPTY_SCENE, type MapScene } from "../../widgets/map/map-scene";
 import { useCachedQuery } from "../../shared/data-cache";
@@ -16,6 +16,7 @@ import MicButton, { voiceStatusText } from "../voice/MicButton";
 import { isVoiceFrame, useVoiceInput } from "../voice/useVoiceInput";
 import { compactResult, lastUserMessage, readSavedConversation, writeSavedConversation, type ChatResult, type Message, type SavedChat, type TurnStep } from "./chat-storage";
 import TurnSteps from "./TurnSteps";
+import CitationList from "./CitationList";
 import ImportLayer from "../imports/ImportLayer";
 import { importStore } from "../imports/import-store";
 import { contextSuggestions, rotateSuggestions, starterSuggestions } from "./suggestions";
@@ -216,9 +217,8 @@ export default function AssistantWorkspace() {
             setSuggestionOffset(0);
             // The streamed text is replaced by the final message, which is the authoritative version.
             const steps = finishedSteps();
-            setMessages((current) => current.at(-1)?.streaming
-              ? [...current.slice(0, -1), { role: "assistant", text: frame.assistantMessage, durationMs, steps }]
-              : [...current, { role: "assistant", text: frame.assistantMessage, durationMs, steps }]);
+            const reply: Message = { role: "assistant", text: frame.assistantMessage, durationMs, steps, ...(frame.citations?.length ? { citations: frame.citations, citationsMode: frame.citationsMode ?? "cited" } : {}) };
+            setMessages((current) => current.at(-1)?.streaming ? [...current.slice(0, -1), reply] : [...current, reply]);
           }
           if (frame.type === "turn.cancelled") {
             const durationMs = elapsedSince(requestStartedAtRef.current);
@@ -286,6 +286,15 @@ export default function AssistantWorkspace() {
   // Background events layer of the assistant map: the last week, up to one page.
   const eventsLayer = useCachedQuery(mapMode === "assistant" && mapLayers.events ? "map:events-layer" : null, () => searchEvents(eventQueryParams({ days: 7, minMagnitude: null, sourceIds: [], near: null, limit: 200 })), 5 * 60_000);
   const sourceLabels = Object.fromEntries(sources.map((source) => [source.id, source.label]));
+  // A citation can be shown on the map only while its row is among the results there (older answers' rows are not).
+  const citationOnMap = (citation: Citation) => citation.entityType === "place"
+    ? mapPlaces.some((place) => place.id === citation.id)
+    : mapRecords.some((record) => record.id === citation.id);
+  const showCitation = (citation: Citation) => {
+    if (!citationOnMap(citation)) return;
+    setMapMode("assistant");
+    setSelectedResultKey(`${citation.entityType}:${citation.id}`);
+  };
   /** Starts a question about a place or event: it becomes the selected map point and a ready question is offered. */
   const askAbout = useCallback(({ place, record }: { place?: PlaceView; record?: RecordView }) => {
     const item = place ?? record;
@@ -652,7 +661,7 @@ export default function AssistantWorkspace() {
                 {pending && message.streaming && index === messages.length - 1 && renderLiveProgress()}
                 <article className={`message ${message.role}${message.streaming ? " streaming" : ""}`}>
                   {message.role === "assistant" && <span className="message-avatar"><Sparkles size={14} /></span>}
-                  {message.role === "assistant" ? <div className="message-body"><div className="message-content"><Suspense fallback={<p>{message.text}</p>}><MarkdownMessage text={message.text} /></Suspense></div>{message.choices?.length ? <div className="clarification-choices">{message.choices.map((choice) => <button key={choice.id} type="button" disabled={pending} onClick={() => { setDraft(choice.label); composerRef.current?.focus(); }}>{choice.label}</button>)}</div> : null}{message.steps?.length ? <TurnSteps steps={message.steps} language={language} collapsed /> : null}{message.durationMs !== undefined && <span className="message-duration"><Clock3 size={12} aria-hidden="true" />{t("Время ответа", "Response time")} · {formatElapsed(message.durationMs, language)}</span>}</div> : <p>{message.text}</p>}
+                  {message.role === "assistant" ? <div className="message-body"><div className="message-content"><Suspense fallback={<p>{message.text}</p>}><MarkdownMessage text={message.text} citations={message.citations} onCite={showCitation} /></Suspense></div>{message.citations?.length ? <CitationList citations={message.citations} mode={message.citationsMode} language={language} sourceLabels={sourceLabels} isOnMap={citationOnMap} onShow={showCitation} /> : null}{message.choices?.length ? <div className="clarification-choices">{message.choices.map((choice) => <button key={choice.id} type="button" disabled={pending} onClick={() => { setDraft(choice.label); composerRef.current?.focus(); }}>{choice.label}</button>)}</div> : null}{message.steps?.length ? <TurnSteps steps={message.steps} language={language} collapsed /> : null}{message.durationMs !== undefined && <span className="message-duration"><Clock3 size={12} aria-hidden="true" />{t("Время ответа", "Response time")} · {formatElapsed(message.durationMs, language)}</span>}</div> : <p>{message.text}</p>}
                 </article></Fragment>)}
                 {pending && !messages.at(-1)?.streaming && renderLiveProgress()}
               </div>

@@ -1,8 +1,8 @@
-import type { PlaceView, RecordView, SearchArea, SourceView, TripPlan } from "@waypoint-ai/shared";
+import type { Citation, PlaceView, RecordView, SearchArea, SourceView, TripPlan } from "@waypoint-ai/shared";
 
 /** One line of the progress feed shown while a turn runs, kept on the answer it produced. */
 export type TurnStep = { id: string; label: string; state: "running" | "done" | "failed"; detail?: string };
-export type Message = { role: "assistant" | "user"; text: string; durationMs?: number; choices?: Array<{ id: string; label: string }>; steps?: TurnStep[]; streaming?: boolean };
+export type Message = { role: "assistant" | "user"; text: string; durationMs?: number; choices?: Array<{ id: string; label: string }>; steps?: TurnStep[]; streaming?: boolean; citations?: Citation[]; citationsMode?: "cited" | "shown_to_model" };
 
 /** What the last completed turn of a chat put on the map, kept so the chat can be reopened with its results. */
 export interface ChatResult {
@@ -118,7 +118,21 @@ function readMessages(value: unknown): Message[] {
     Boolean(item && typeof item === "object" && "role" in item && "text" in item)
     && ((item as Message).role === "user" || (item as Message).role === "assistant")
     && typeof (item as Message).text === "string",
-  ).slice(-MAX_MESSAGES).map(({ streaming: _streaming, ...message }) => message) : [];
+  ).slice(-MAX_MESSAGES).map(({ streaming: _streaming, citations, citationsMode, ...message }) => {
+    const valid = Array.isArray(citations) ? citations.filter(isCitation).slice(0, 20) : [];
+    return valid.length ? { ...message, citations: valid, citationsMode: citationsMode === "shown_to_model" ? "shown_to_model" : "cited" } : message;
+  }) : [];
+}
+
+/** A stored citation is shown as a link, so only refs, labels, and HTTPS URLs of the expected shape are kept. */
+function isCitation(value: unknown): value is Citation {
+  if (!value || typeof value !== "object") return false;
+  const citation = value as Citation;
+  return typeof citation.ref === "string" && /^[EP]\d{1,3}$/.test(citation.ref)
+    && (citation.entityType === "record" || citation.entityType === "place")
+    && typeof citation.id === "string" && typeof citation.sourceId === "string" && typeof citation.label === "string"
+    && (citation.url === null || (typeof citation.url === "string" && citation.url.startsWith("https://")))
+    && (citation.observedAt === undefined || typeof citation.observedAt === "string");
 }
 
 /** Browser storage can be edited or stale; anything that does not look like a stored result is ignored. */

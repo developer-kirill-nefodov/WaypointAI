@@ -23,9 +23,10 @@ const SIGHTS: [string, string, string] = ["достопримечательно�
 
 /**
  * The reply to a place search, built from the request and the returned rows only. The model chose the search; it
- * does not retell the results, so it cannot add places that the database did not return.
+ * does not retell the results, so it cannot add places that the database did not return. `refOf` adds each place's
+ * citation ref.
  */
-export function formatPlaceResultsMessage(search: PlaceSearch, places: PlaceView[], total: number, language: Language): string {
+export function formatPlaceResultsMessage(search: PlaceSearch, places: PlaceView[], total: number, language: Language, refOf?: (place: PlaceView) => string): string {
   const pick = ([ru, en, de]: [string, string, string]) => (language === "ru" ? ru : language === "de" ? de : en);
   const what = search.category ?? (search.kind ? pick(KIND_LABELS[search.kind] ?? KIND_LABELS.any!) : search.city && !search.query ? pick(SIGHTS) : pick(KIND_LABELS.any!));
   const scope = [what, search.query ? `«${search.query}»` : null, search.city].filter(Boolean).join(", ");
@@ -39,7 +40,7 @@ export function formatPlaceResultsMessage(search: PlaceSearch, places: PlaceView
       : `Found in the local OpenStreetMap snapshot (${scope}): ${places.length}${total > places.length ? ` of ${total}` : ""}. These are matches, not ranked recommendations; they are marked on the map.`;
   const lines = places.map((place, index) => {
     const address = [place.street && [place.street, place.houseNumber].filter(Boolean).join(" "), place.postcode, place.city].filter(Boolean).join(", ");
-    return `${index + 1}. ${place.name}${address ? ` — ${address}` : ""}`;
+    return `${index + 1}. ${place.name}${address ? ` — ${address}` : ""}${refOf ? ` [${refOf(place)}]` : ""}`;
   });
   return [header, lines.join("\n")].join("\n\n");
 }

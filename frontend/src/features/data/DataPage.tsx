@@ -478,6 +478,7 @@ function EventsOverview({ language, dataset }: { language: Language; dataset: Da
     <dl className="data-facts wide">
       <div><dt>{t("Событий", "Events")}</dt><dd>{count(dataset.events, language)}</dd></div>
       <div><dt>{t("Последний импорт", "Last import")}</dt><dd>{dataset.lastImportAt ? formatDateTime(dataset.lastImportAt, language) : "—"}</dd></div>
+      {dataset.mode === "approved_live" && <div><dt>{t("Есть и в другом каталоге", "Also in another catalogue")}</dt><dd>{count(dataset.matchedEvents, language)}</dd></div>}
       <div><dt>{t("Лицензия", "Licence")}</dt><dd>{dataset.license ?? "—"}{dataset.attribution ? ` · ${dataset.attribution}` : ""}</dd></div>
       <div><dt>{t("Источник", "Source")}</dt><dd>{dataset.sourceUrl ?? "—"}</dd></div>
       <div><dt>ID</dt><dd><code>{dataset.id}</code></dd></div>

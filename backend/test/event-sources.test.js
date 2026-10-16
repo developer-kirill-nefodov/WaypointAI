@@ -4,6 +4,7 @@ import { buildIngvQueryUrl, createIngvAdapter, normalizeIngvPayload } from "../s
 import { parseFdsnTime } from "../src/sources/ingv/ingv.schema.ts";
 import { fetchWithRetry, parseRetryAfter } from "../src/sources/http.ts";
 import { generateSyntheticEvents } from "../src/sources/synthetic/synthetic.adapter.ts";
+import { buildUsgsQueryUrl, createUsgsAdapter, normalizeUsgsPayload } from "../src/sources/usgs/usgs.adapter.ts";
 
 // Synthetic feature shaped like an INGV FDSN GeoJSON response; not a real catalogue event.
 function feature(overrides = {}) {
@@ -214,6 +215,59 @@ test("accepts only allowlisted HTTPS hosts for the event source URL", async () =
   assert.equal(isAllowedEventSourceUrl("https://webservices.ingv.it.evil.example/x"), false);
   assert.equal(isAllowedEventSourceUrl("https://169.254.169.254/latest/meta-data"), false);
   assert.equal(isAllowedEventSourceUrl("not a url"), false);
+  // Each source's URL must be on its own host.
+  assert.equal(isAllowedEventSourceUrl("https://earthquake.usgs.gov/fdsnws/event/1/query", "usgs"), true);
+  assert.equal(isAllowedEventSourceUrl("https://earthquake.usgs.gov/fdsnws/event/1/query"), false);
+  assert.equal(isAllowedEventSourceUrl("https://webservices.ingv.it/fdsnws/event/1/query", "usgs"), false);
+});
+
+// Synthetic feature shaped like a USGS FDSN GeoJSON response; not a real catalogue event.
+function usgsFeature(overrides = {}) {
+  return {
+    type: "Feature",
+    id: overrides.id ?? "xx9000test",
+    properties: { time: Date.parse("2026-10-12T15:34:43.630Z"), updated: Date.parse("2026-10-13T08:00:00Z"), mag: 3.1, magType: "mb", place: "Synthetic test location", type: "earthquake", status: "reviewed", net: "xx", ...overrides.properties },
+    geometry: { type: "Point", coordinates: overrides.coordinates ?? [13.1, 42.6, 10] },
+  };
+}
+
+test("normalizes a USGS feature: epoch-millisecond time, update time as revision, link built from the ID", () => {
+  const { events, skipped } = normalizeUsgsPayload(collection([usgsFeature()]));
+  assert.equal(skipped, 0);
+  assert.deepEqual(events[0], {
+    externalId: "xx9000test",
+    observedAt: new Date("2026-10-12T15:34:43.630Z"),
+    lat: 42.6,
+    lon: 13.1,
+    category: "seismic:earthquake",
+    revision: `u:${Date.parse("2026-10-13T08:00:00Z")}`,
+    attributes: {
+      label: "M3.1 · Synthetic test location",
+      magnitude: 3.1,
+      magnitudeType: "mb",
+      depthKm: 10,
+      placeDescription: "Synthetic test location",
+      author: "xx",
+      reviewStatus: "reviewed",
+      sourceEventUrl: "https://earthquake.usgs.gov/earthquakes/eventpage/xx9000test",
+    },
+  });
+  // An ID that could change the link, a bad time, or bad coordinates are skipped.
+  const mixed = normalizeUsgsPayload(collection([usgsFeature(), usgsFeature({ id: "../x" }), usgsFeature({ properties: { time: "yesterday" } }), usgsFeature({ coordinates: [200, 1, 1] })]));
+  assert.equal(mixed.events.length, 1);
+  assert.equal(mixed.skipped, 3);
+  assert.throws(() => normalizeUsgsPayload({ error: "nope" }), { code: "upstream_malformed" });
+});
+
+test("queries USGS with full parameter names and accepts an empty collection", async () => {
+  const url = buildUsgsQueryUrl("https://earthquake.usgs.gov/fdsnws/event/1/query", window, [6, 35, 19, 48], 20000);
+  assert.equal(url.searchParams.get("starttime"), "2026-10-06T00:00:00");
+  assert.equal(url.searchParams.get("minlatitude"), "35");
+  assert.equal(url.searchParams.get("maxlongitude"), "19");
+  assert.equal(url.searchParams.get("format"), "geojson");
+  const adapter = createUsgsAdapter({ baseUrl: "https://earthquake.usgs.gov/fdsnws/event/1/query", bbox: [6, 35, 19, 48], timeoutMs: 1000, userAgent: "test", fetchImpl: async () => jsonResponse(collection([])), sleep: noSleep });
+  assert.deepEqual(await adapter.fetchEvents(window), { events: [], skipped: 0, truncated: false });
+  assert.equal(adapter.descriptor.id, "usgs-fdsn");
 });
 
 test("rejects a response body above the size limit without retrying", async () => {

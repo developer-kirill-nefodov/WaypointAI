@@ -42,6 +42,8 @@ function memoryStore() {
       for (const id of recordIds) this.linked.add(id);
       return recordIds.length;
     },
+    matchedWindows: [],
+    async matchAcrossSources(sourceId, window) { this.matchedWindows.push({ sourceId, window }); return 0; },
     async findUnlinkedRecordIds(sourceId) {
       return [...records.keys()].filter((id) => id.startsWith(`${sourceId}:`) && !this.linked.has(id));
     },

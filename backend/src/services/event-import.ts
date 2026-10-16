@@ -45,6 +45,8 @@ export interface EventImportStore {
   linkNearbyPlaces(recordIds: string[]): Promise<number>;
   /** Records of the source in the window without nearby-place links, for example after a failed link step. */
   findUnlinkedRecordIds(sourceId: string, window: TimeWindow): Promise<string[]>;
+  /** Recomputes the cross-source matches of the source's events in the window; returns the number of matched pairs. */
+  matchAcrossSources(sourceId: string, window: TimeWindow): Promise<number>;
   finishRun(runId: string, outcome: RunOutcome): Promise<void>;
 }
 
@@ -108,6 +110,8 @@ export interface ImportSummary {
   window: TimeWindow;
   counts: RunCounts;
   linkedPlaces: number;
+  /** Pairs with events of other live sources (the same earthquake in another catalogue). */
+  matchedEvents: number;
   truncated: boolean;
 }
 
@@ -167,6 +171,8 @@ export async function importEvents(input: ImportEventsInput): Promise<ImportSumm
     const toLink = new Set([...upserted.insertedIds, ...upserted.updatedIds, ...unlinked]);
     report("linking", 0.9, windows.length);
     const linkedPlaces = await input.store.linkNearbyPlaces([...toLink]);
+    // Synthetic events never confirm or contradict observed ones, so only live catalogues are cross-checked.
+    const matchedEvents = descriptor.mode === "approved_live" ? await input.store.matchAcrossSources(descriptor.id, window) : 0;
     await input.store.finishRun(runId, {
       status: "succeeded",
       counts,
@@ -174,7 +180,7 @@ export async function importEvents(input: ImportEventsInput): Promise<ImportSumm
       finishedAt: new Date(),
     });
     report("done", 1, windows.length);
-    return { runId, sourceId: descriptor.id, window, counts, linkedPlaces, truncated: fetched.truncated };
+    return { runId, sourceId: descriptor.id, window, counts, linkedPlaces, matchedEvents, truncated: fetched.truncated };
   } catch (error) {
     const cancelled = input.signal?.aborted && !(error instanceof SourceFetchError);
     const errorCode = cancelled ? "import_cancelled" : importErrorCode(error);

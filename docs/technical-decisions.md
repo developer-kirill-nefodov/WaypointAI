@@ -33,7 +33,22 @@ Measured with a Central Italy box (lat 41–44.5, lon 10–15), which matches th
 - **No account, documented standard API, GeoJSON output, radius and magnitude filters on the server.**
 - **No personal data.** Events describe natural phenomena, not people.
 
-**Second adapter (optional): USGS.** Public domain and global. Adding it after INGV proves that a new source is one adapter, not a redesign. It is not the demo source because European coverage below magnitude 2.5 is sparse.
+**Second adapter: USGS, used to cross-check INGV** (added 2026-10-16). Public domain and global. It is not the primary source because European coverage below magnitude 2.5 is sparse, but as an independent catalogue it confirms or contradicts the larger INGV events. Adding it took one adapter (`sources/usgs/`) and no schema change for events.
+
+### Cross-check between catalogues
+
+Measured on 2026-10-16 for the default area (lat 35–48, lon 6–19) over 30 days: INGV 1,282 events, USGS 4 (M3.1–4.9). Every USGS event had an INGV counterpart within 3.6 s and 26 km; magnitudes differed by at most 0.4 (different magnitude types: ML, mb, Mww) and depths by at most 8.2 km, including two events about 270 and 370 km deep.
+
+| Rule | Value | Reason |
+|---|---|---|
+| Same earthquake | Other catalogue's event within 30 s and 50 km | Agencies locate events from different stations; observed differences were a few seconds and up to 26 km |
+| Choosing a pair | Closest first (time and distance, each relative to its limit), one pair per event and other source | A burst of aftershocks must not pair one event with several |
+| Agreement | Magnitude difference ≤ 0.5; depth difference ≤ 10 km or 10% of the depth | Magnitude types differ between agencies; deep events have larger depth uncertainty |
+| No pair | "Only in one catalogue" only when the other catalogue has a successful import covering that time; otherwise "unchecked" | An absent event means nothing if the other catalogue was never loaded for that period |
+| Synthetic events | Never matched | Generated data must not confirm or contradict observations |
+| Listing | One row per earthquake, INGV preferred, unless the INGV copy fails the filters | Avoids double counting in totals, summaries, and the assistant's answers |
+
+Matches are derived data in `record_matches` (one row per pair, smaller record ID first, cascade-deleted with either record) and are recomputed for the imported window after every live import.
 
 **Rejected: EMSC.** Good coverage, but the commercial-use clause makes it a poor default for client work.
 

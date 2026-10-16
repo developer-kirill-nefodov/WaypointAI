@@ -365,3 +365,44 @@ test("lists countries and settlements, and deletes an imported dataset in one tr
   assert.ok((await sql("SELECT count(*)::int AS n FROM places WHERE source_id = $1", [PLACE_SOURCE_ID]))[0].n > 0);
   await sql("DELETE FROM data_sources WHERE id = $1", [AREA]);
 });
+
+test("matches events across live catalogues, reports their cross-check, merges copies, and cascades deletions", { skip }, async () => {
+  // Two synthetic sources registered as live catalogues, so they take part in cross-checks.
+  const live = (id, events) => ({
+    descriptor: { id, label: `Synthetic live ${id}`, mode: "approved_live", license: "CC0-1.0", attribution: "test", sourceUrl: null },
+    fetchEvents: async () => ({ events, skipped: 0, truncated: false }),
+  });
+  const quake = (externalId, seconds, overrides = {}) => event(externalId, { observedAt: new Date(Date.parse("2026-10-12T08:00:00Z") + seconds * 1000), lat: 41.5, lon: 12.5, attributes: { label: `Synthetic ${externalId}`, magnitude: 3, depthKm: 10 }, ...overrides });
+  const run = (source, offsetMinutes) => modules.importService.importEvents({ adapter: source, store: modules.store, days: 7, cooldownSeconds: 0, now: new Date(now.getTime() + offsetMinutes * 60_000) });
+
+  await run(live("test-live-a", [quake("same", 0), quake("differs", 600), quake("alone", 1200)]), 30);
+  const second = await run(live("test-live-b", [quake("same", 2, { lat: 41.55 }), quake("differs", 601, { attributes: { label: "Synthetic differs", magnitude: 4.2, depthKm: 10 } })]), 31);
+  assert.equal(second.matchedEvents, 2);
+
+  const search = (extra = {}) => modules.repo.searchEvents({ from: new Date("2026-10-12T07:00:00Z"), to: new Date("2026-10-12T09:00:00Z"), sourceIds: ["test-live-a", "test-live-b"], limit: 50, ...extra });
+  const statuses = Object.fromEntries((await search()).events.map((item) => [item.id, item.crossCheck.status]));
+  assert.deepEqual(statuses, {
+    "test-live-a:same": "confirmed", "test-live-b:same": "confirmed",
+    "test-live-a:differs": "conflict", "test-live-b:differs": "conflict",
+    // test-live-b was imported for this time and does not report it.
+    "test-live-a:alone": "single",
+  });
+  // Merging keeps one copy per earthquake, from the preferred source.
+  const merged = await search({ mergePriority: ["test-live-a", "test-live-b"] });
+  assert.equal(merged.total, 3);
+  assert.deepEqual(merged.events.map((item) => item.sourceId), ["test-live-a", "test-live-a", "test-live-a"]);
+  // ...unless the preferred copy fails a filter: then the other copy is listed.
+  const strong = await search({ mergePriority: ["test-live-a", "test-live-b"], minMagnitude: 4 });
+  assert.deepEqual(strong.events.map((item) => item.id), ["test-live-b:differs"]);
+  assert.deepEqual((await search({ crossCheck: "confirmed" })).events.map((item) => item.id).sort(), ["test-live-a:same", "test-live-b:same"]);
+
+  const details = await modules.repo.getEventDetails("test-live-a:same");
+  assert.equal(details.crossCheck.status, "confirmed");
+  assert.equal(details.crossCheck.matches[0].event.id, "test-live-b:same");
+  assert.equal(details.crossCheck.matches[0].timeDeltaMs, 2000);
+  assert.ok(details.sources.some((source) => source.id === "test-live-b"));
+
+  // Deleting a record removes its matches.
+  await sql("DELETE FROM records WHERE source_id = 'test-live-b'");
+  assert.equal((await sql("SELECT count(*)::integer AS n FROM record_matches"))[0].n, 0);
+});

@@ -6,6 +6,7 @@ import { Source } from "../models/source.js";
 import { SourceSyncRun } from "../models/source-sync-run.js";
 import { ImportAlreadyRunningError, type EventImportStore, type UpsertResult } from "../services/event-import.js";
 import type { NormalizedEvent } from "../sources/source-adapter.js";
+import { MATCH_RULES, matchEvents, type MatchableEvent } from "../services/event-matching.js";
 import { degreeDeltasSql, haversineSql } from "./geo-sql.js";
 
 initModels();
@@ -124,6 +125,58 @@ export const sqlEventImportStore: EventImportStore = {
     return (rows as Array<{ id: string }>).map((row) => row.id);
   },
 
+  async matchAcrossSources(sourceId, window) {
+    // Events of every live catalogue around the window; the margin lets an event at the window's edge find its pair.
+    const [rows] = await database.query(
+      `SELECT r.id, r.source_id, r.observed_at, r.lat, r.lon,
+         CASE WHEN jsonb_typeof(r.attributes->'magnitude') = 'number' THEN (r.attributes->>'magnitude')::double precision END AS magnitude,
+         CASE WHEN jsonb_typeof(r.attributes->'depthKm') = 'number' THEN (r.attributes->>'depthKm')::double precision END AS depth_km
+       FROM records r JOIN data_sources s ON s.id = r.source_id AND s.mode = 'approved_live' AND s.status = 'ready'
+       WHERE r.category LIKE 'seismic:%' AND r.observed_at BETWEEN $1 AND $2`,
+      { bind: [new Date(window.start.getTime() - MATCH_RULES.maxTimeDeltaMs), new Date(window.end.getTime() + MATCH_RULES.maxTimeDeltaMs)] },
+    );
+    const all = (rows as MatchRow[]).map((row): MatchableEvent => ({
+      id: row.id,
+      sourceId: row.source_id,
+      observedAt: new Date(row.observed_at),
+      lat: Number(row.lat),
+      lon: Number(row.lon),
+      magnitude: row.magnitude === null ? null : Number(row.magnitude),
+      depthKm: row.depth_km === null ? null : Number(row.depth_km),
+    }));
+    const events = all.filter((event) => event.sourceId === sourceId && event.observedAt >= window.start && event.observedAt <= window.end);
+    const matches = matchEvents(events, all.filter((event) => event.sourceId !== sourceId));
+    const ids = events.map((event) => event.id);
+    await database.transaction(async (transaction) => {
+      // Derived rows of these events are recomputed, as nearby-place links are.
+      await database.query(
+        "DELETE FROM record_matches WHERE record_id = ANY($1::varchar[]) OR matched_record_id = ANY($1::varchar[])",
+        { bind: [ids], transaction },
+      );
+      if (!matches.length) return;
+      await database.query(
+        `INSERT INTO record_matches (record_id, matched_record_id, time_delta_ms, distance_meters, magnitude_delta, depth_delta_km, consistent)
+         SELECT * FROM unnest($1::varchar[], $2::varchar[], $3::integer[], $4::integer[], $5::real[], $6::real[], $7::boolean[])
+         ON CONFLICT (record_id, matched_record_id) DO UPDATE SET time_delta_ms = EXCLUDED.time_delta_ms,
+           distance_meters = EXCLUDED.distance_meters, magnitude_delta = EXCLUDED.magnitude_delta,
+           depth_delta_km = EXCLUDED.depth_delta_km, consistent = EXCLUDED.consistent, updated_at = now()`,
+        {
+          bind: [
+            matches.map((match) => match.recordId),
+            matches.map((match) => match.matchedRecordId),
+            matches.map((match) => match.timeDeltaMs),
+            matches.map((match) => match.distanceMeters),
+            matches.map((match) => match.magnitudeDelta),
+            matches.map((match) => match.depthDeltaKm),
+            matches.map((match) => match.consistent),
+          ],
+          transaction,
+        },
+      );
+    });
+    return matches.length;
+  },
+
   async finishRun(runId, outcome) {
     await SourceSyncRun.update({
       status: outcome.status,
@@ -136,6 +189,8 @@ export const sqlEventImportStore: EventImportStore = {
     }, { where: { id: runId } });
   },
 };
+
+type MatchRow = { id: string; source_id: string; observed_at: Date; lat: number; lon: number; magnitude: number | null; depth_km: number | null };
 
 function upsertValues(sourceId: string, event: NormalizedEvent): Record<UpsertColumn, unknown> {
   return {

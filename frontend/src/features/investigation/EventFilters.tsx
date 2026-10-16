@@ -48,6 +48,10 @@ export default function EventFilters({ language, filters, sources, onChange }: E
           </select>
         </label>
       </div>
+      <label className="investigation-toggle" title={t("Событие есть и в другом каталоге (INGV, USGS), и описания совпадают. USGS обычно не фиксирует события слабее M2.5.", "The event is also in another catalogue (INGV, USGS) and the descriptions agree. USGS rarely lists events below M2.5.")}>
+        <input type="checkbox" checked={Boolean(filters.confirmedOnly)} onChange={(event) => onChange({ ...filters, confirmedOnly: event.target.checked })} />
+        <span>{t("Только подтверждённые другим каталогом", "Only events confirmed by another catalogue")}</span>
+      </label>
       {sources.length > 0 && (
         <fieldset className="investigation-source-filter">
           <legend>{t("Источники", "Sources")} · {sourceSelection}</legend>

@@ -28,11 +28,39 @@ export interface EventSearchInput {
   maxMagnitude?: number;
   sourceIds?: string[];
   category?: string;
+  /** Only events another catalogue confirms, or whose descriptions disagree. */
+  crossCheck?: "confirmed" | "conflict";
+  /**
+   * Source IDs from most to least preferred. When given, an event that another catalogue also reports is listed once:
+   * the copy from the preferred source is kept if it matches the same filters.
+   */
+  mergePriority?: string[];
   limit: number;
   cursor?: EventCursor;
 }
 
-export type EventView = RecordView & { distanceMeters?: number };
+/** How an event compares with other live catalogues; see services/event-matching.ts for the rules. */
+export interface CrossCheckSummary {
+  /**
+   * confirmed: another catalogue reports it and the descriptions agree; conflict: reported, but magnitude or depth
+   * differ; single: another catalogue was imported for that time but does not report it; unchecked: nothing to compare.
+   */
+  status: "confirmed" | "conflict" | "single" | "unchecked";
+  matchedSourceIds: string[];
+  /** Other live sources whose successful imports cover the event's time. */
+  checkedSourceIds: string[];
+}
+
+export interface CrossCheckMatch {
+  event: RecordView;
+  timeDeltaMs: number;
+  distanceMeters: number;
+  magnitudeDelta: number | null;
+  depthDeltaKm: number | null;
+  consistent: boolean;
+}
+
+export type EventView = RecordView & { distanceMeters?: number; crossCheck?: CrossCheckSummary };
 
 export interface EventSearchResult {
   total: number;
@@ -61,6 +89,7 @@ export interface EventDetails {
   linkedPlaces: Array<{ relation: "nearby"; distanceMeters: number; place: PlaceView }>;
   sources: SourceRows;
   lastSync: SyncSummary | null;
+  crossCheck: CrossCheckSummary & { matches: CrossCheckMatch[] };
 }
 
 export interface EntityDetails {
@@ -134,7 +163,9 @@ export async function searchEvents(input: EventSearchInput): Promise<EventSearch
   ]);
 
   const eventRows = rows as EventRow[];
-  const page = eventRows.slice(0, input.limit).map(rowToEventView);
+  const pageRows = eventRows.slice(0, input.limit).map(rowToEventView);
+  const crossChecks = await getCrossChecks(pageRows);
+  const page = pageRows.map((event) => ({ ...event, crossCheck: crossChecks.get(event.id)! }));
   const last = page.at(-1);
   const hasMore = eventRows.length > input.limit;
   const summary = (countRows as Array<{ total: number; min_magnitude: number | null; max_magnitude: number | null }>)[0];
@@ -148,33 +179,52 @@ export async function searchEvents(input: EventSearchInput): Promise<EventSearch
   };
 }
 
-/** WHERE conditions for every filter, plus the distance expression when a circle is given. */
-function buildEventFilter(input: EventSearchInput, param: BindParam): { conditions: string[]; distanceSql: string } {
-  const conditions = [`r.observed_at >= ${param(input.from)}`, `r.observed_at <= ${param(input.to)}`];
+/**
+ * WHERE conditions for every filter, plus the distance expression when a circle is given. `alias` names the records
+ * table, so the same filters can be applied to the other copy of a matched event.
+ */
+function buildEventFilter(input: EventSearchInput, param: BindParam, alias = "r", withMerge = true): { conditions: string[]; distanceSql: string } {
+  const a = alias;
+  const magnitude = MAGNITUDE_SQL.replaceAll("r.", `${a}.`);
+  const conditions = [`${a}.observed_at >= ${param(input.from)}`, `${a}.observed_at <= ${param(input.to)}`];
   let distanceSql = "NULL::double precision";
 
-  if (input.sourceIds?.length) conditions.push(`r.source_id = ANY(${param(input.sourceIds)}::varchar[])`);
-  if (input.category) conditions.push(`r.category = ${param(input.category)}`);
-  if (input.minMagnitude !== undefined) conditions.push(`${MAGNITUDE_SQL} >= ${param(input.minMagnitude)}`);
-  if (input.maxMagnitude !== undefined) conditions.push(`${MAGNITUDE_SQL} <= ${param(input.maxMagnitude)}`);
+  if (input.sourceIds?.length) conditions.push(`${a}.source_id = ANY(${param(input.sourceIds)}::varchar[])`);
+  if (input.category) conditions.push(`${a}.category = ${param(input.category)}`);
+  if (input.minMagnitude !== undefined) conditions.push(`${magnitude} >= ${param(input.minMagnitude)}`);
+  if (input.maxMagnitude !== undefined) conditions.push(`${magnitude} <= ${param(input.maxMagnitude)}`);
   if (input.bbox) {
     const [minLon, minLat, maxLon, maxLat] = input.bbox;
     conditions.push(
-      `r.lat BETWEEN ${param(minLat)} AND ${param(maxLat)}`,
-      `r.lon BETWEEN ${param(minLon)} AND ${param(maxLon)}`,
+      `${a}.lat BETWEEN ${param(minLat)} AND ${param(maxLat)}`,
+      `${a}.lon BETWEEN ${param(minLon)} AND ${param(maxLon)}`,
     );
   }
   if (input.near) {
     const { lat, lon, radiusMeters } = input.near;
     const delta = degreeDeltas(lat, radiusMeters);
     const center = { lat: param(lat), lon: param(lon) };
-    distanceSql = haversineSql({ lat: "r.lat", lon: "r.lon" }, center);
+    distanceSql = haversineSql({ lat: `${a}.lat`, lon: `${a}.lon` }, center);
     // Bounding-box prefilter uses the (lat, lon) index; the haversine check makes the circle exact.
     conditions.push(
-      `r.lat BETWEEN ${param(lat - delta.lat)} AND ${param(lat + delta.lat)}`,
-      `r.lon BETWEEN ${param(lon - delta.lon)} AND ${param(lon + delta.lon)}`,
+      `${a}.lat BETWEEN ${param(lat - delta.lat)} AND ${param(lat + delta.lat)}`,
+      `${a}.lon BETWEEN ${param(lon - delta.lon)} AND ${param(lon + delta.lon)}`,
       `${distanceSql} <= ${param(radiusMeters)}`,
     );
+  }
+  if (input.crossCheck) {
+    conditions.push(`EXISTS (SELECT 1 FROM record_matches m WHERE (m.record_id = ${a}.id OR m.matched_record_id = ${a}.id) AND m.consistent = ${input.crossCheck === "confirmed" ? "true" : "false"})`);
+  }
+  if (withMerge && input.mergePriority?.length) {
+    // Hide this copy when a copy from a preferred source passes the same filters (it is listed instead).
+    const priority = param(input.mergePriority);
+    const other = buildEventFilter({ ...input, crossCheck: undefined }, param, `${a}_o`, false);
+    conditions.push(`NOT EXISTS (
+      SELECT 1 FROM record_matches m
+      JOIN records ${a}_o ON ${a}_o.id = CASE WHEN m.record_id = ${a}.id THEN m.matched_record_id ELSE m.record_id END
+      WHERE (m.record_id = ${a}.id OR m.matched_record_id = ${a}.id)
+        AND coalesce(array_position(${priority}::varchar[], ${a}_o.source_id), 1000) < coalesce(array_position(${priority}::varchar[], ${a}.source_id), 1000)
+        AND ${other.conditions.join(" AND ")})`);
   }
   return { conditions, distanceSql };
 }
@@ -203,11 +253,12 @@ export async function getEventDetails(id: string): Promise<EventDetails | null> 
     place: toPlaceView(link.place!),
   }));
   const sourceIds = [...new Set([event.sourceId, ...linkedPlaces.map((link) => link.place.sourceId)])];
-  const [sources, syncBySource] = await Promise.all([
-    getSources(sourceIds),
+  const [crossCheck, syncBySource] = await Promise.all([
+    getEventCrossCheck(event),
     getSyncSummaries([event.sourceId]),
   ]);
-  return { event, linkedPlaces, sources, lastSync: syncBySource.get(event.sourceId) ?? null };
+  const sources = await getSources([...new Set([...sourceIds, ...crossCheck.matches.map((match) => match.event.sourceId)])]);
+  return { event, linkedPlaces, sources, lastSync: syncBySource.get(event.sourceId) ?? null, crossCheck };
 }
 
 export async function getEntityDetails(id: string, limit: number): Promise<EntityDetails | null> {
@@ -235,6 +286,79 @@ export async function getEntityDetails(id: string, limit: number): Promise<Entit
   const sourceIds = [...new Set([place.sourceId, ...linkedEvents.map((link) => link.event.sourceId)])];
   const sources = await getSources(sourceIds);
   return { place, linkedEvents, totalLinkedEvents: count, sources };
+}
+
+type MatchRecordRow = EventRow & { other_of: string; time_delta_ms: number; match_distance_meters: number; magnitude_delta: number | null; depth_delta_km: number | null; consistent: boolean };
+
+/** Every match of these events, with the other event's row. */
+async function findMatches(ids: string[]): Promise<MatchRecordRow[]> {
+  if (!ids.length) return [];
+  // A pair is stored once, so it is read from both sides: both events of a pair can be on the same page.
+  const side = (own: string, other: string) => `SELECT o.id, o.source_id, o.observed_at, o.lat, o.lon, o.accuracy_meters, o.category, o.attributes,
+       NULL AS distance_meters, m.${own} AS other_of,
+       m.time_delta_ms, m.distance_meters AS match_distance_meters, m.magnitude_delta, m.depth_delta_km, m.consistent
+     FROM record_matches m JOIN records o ON o.id = m.${other}
+     WHERE m.${own} = ANY($1::varchar[])`;
+  const [rows] = await database.query(
+    `${side("record_id", "matched_record_id")} UNION ALL ${side("matched_record_id", "record_id")} ORDER BY time_delta_ms`,
+    { bind: [ids] },
+  );
+  return rows as MatchRecordRow[];
+}
+
+type CoverageRow = { source_id: string; window_start: Date; window_end: Date };
+
+/** Successful import windows of live sources, to tell "not reported by another catalogue" from "not compared". */
+async function liveCoverage(from: Date, to: Date): Promise<CoverageRow[]> {
+  const [rows] = await database.query(
+    `SELECT runs.source_id, runs.window_start, runs.window_end FROM source_sync_runs runs
+     JOIN data_sources s ON s.id = runs.source_id AND s.mode = 'approved_live' AND s.status = 'ready'
+     WHERE runs.status = 'succeeded' AND runs.window_start <= $2 AND runs.window_end >= $1`,
+    { bind: [from, to] },
+  );
+  return rows as CoverageRow[];
+}
+
+function summarize(event: RecordView, sourceMode: string | undefined, matches: Array<{ sourceId: string; consistent: boolean }>, coverage: CoverageRow[]): CrossCheckSummary {
+  const time = Date.parse(event.observedAt);
+  const checkedSourceIds = sourceMode === "approved_live"
+    ? [...new Set(coverage.filter((run) => run.source_id !== event.sourceId && new Date(run.window_start).getTime() <= time && new Date(run.window_end).getTime() >= time).map((run) => run.source_id))]
+    : [];
+  const matchedSourceIds = [...new Set(matches.map((match) => match.sourceId))];
+  const status = matches.length ? (matches.every((match) => match.consistent) ? "confirmed" : "conflict") : checkedSourceIds.length ? "single" : "unchecked";
+  return { status, matchedSourceIds, checkedSourceIds: [...new Set([...checkedSourceIds, ...matchedSourceIds])] };
+}
+
+/** Cross-check summaries for a page of events. */
+export async function getCrossChecks(events: RecordView[]): Promise<Map<string, CrossCheckSummary>> {
+  if (!events.length) return new Map();
+  const times = events.map((event) => Date.parse(event.observedAt));
+  const [matches, coverage, sources] = await Promise.all([
+    findMatches(events.map((event) => event.id)),
+    liveCoverage(new Date(Math.min(...times)), new Date(Math.max(...times))),
+    getSources([...new Set(events.map((event) => event.sourceId))]),
+  ]);
+  const modes = new Map(sources.map((source) => [source.id, source.mode]));
+  return new Map(events.map((event) => [event.id, summarize(
+    event,
+    modes.get(event.sourceId),
+    matches.filter((match) => match.other_of === event.id).map((match) => ({ sourceId: String(match.source_id), consistent: match.consistent })),
+    coverage,
+  )]));
+}
+
+async function getEventCrossCheck(event: RecordView): Promise<CrossCheckSummary & { matches: CrossCheckMatch[] }> {
+  const time = new Date(event.observedAt);
+  const [rows, coverage, sources] = await Promise.all([findMatches([event.id]), liveCoverage(time, time), getSources([event.sourceId])]);
+  const matches = rows.map((row): CrossCheckMatch => ({
+    event: rowToEventView(row),
+    timeDeltaMs: Number(row.time_delta_ms),
+    distanceMeters: Number(row.match_distance_meters),
+    magnitudeDelta: row.magnitude_delta === null ? null : Number(row.magnitude_delta),
+    depthDeltaKm: row.depth_delta_km === null ? null : Number(row.depth_delta_km),
+    consistent: row.consistent,
+  }));
+  return { ...summarize(event, sources[0]?.mode, matches.map((match) => ({ sourceId: match.event.sourceId, consistent: match.consistent })), coverage), matches };
 }
 
 export async function getSyncSummaries(sourceIds?: string[]): Promise<Map<string, SyncSummary>> {

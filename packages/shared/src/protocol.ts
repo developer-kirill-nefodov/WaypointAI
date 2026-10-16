@@ -105,6 +105,18 @@ export interface SourceView {
   lastSync?: SyncSummary | null;
 }
 
+/** A row an answer is based on: an event or record (ref E1, E2, …) or a place (P1, …) returned by a tool. */
+export interface Citation {
+  ref: string;
+  entityType: "record" | "place";
+  id: string;
+  sourceId: string;
+  label: string;
+  observedAt?: string;
+  /** The row's page at its source (INGV, USGS, OpenStreetMap), built from its ID; null when the source has none. */
+  url: string | null;
+}
+
 /** Radius applied by the search_events tool; the map draws it as a circle. */
 export interface SearchArea {
   lat: number;
@@ -172,7 +184,7 @@ export type ServerFrame =
   | (ClientBase & { type: "tool.completed"; tool: ToolName; recordsFound: number })
   | (ClientBase & { type: "assistant.delta"; text: string })
   | (ClientBase & { type: "turn.clarification"; conversationId: string; message: string; choices: Array<{ id: string; label: string }> })
-  | (ClientBase & { type: "turn.completed"; conversationId: string; assistantMessage: string; appliedFilters: Array<Record<string, unknown>>; result: { total: number; records: RecordView[]; places?: PlaceView[]; tripPlan?: TripPlan; searchArea?: SearchArea; mapFeatures: GeoJSON.FeatureCollection }; sources: SourceView[] })
+  | (ClientBase & { type: "turn.completed"; conversationId: string; assistantMessage: string; appliedFilters: Array<Record<string, unknown>>; result: { total: number; records: RecordView[]; places?: PlaceView[]; tripPlan?: TripPlan; searchArea?: SearchArea; mapFeatures: GeoJSON.FeatureCollection }; sources: SourceView[]; citations?: Citation[]; citationsMode?: "cited" | "shown_to_model" })
   | (ClientBase & { type: "turn.cancelled" })
   | (ClientBase & { type: "turn.error"; code: string; message: string; retryable: boolean })
   | (ClientBase & { type: "voice.ready" })
