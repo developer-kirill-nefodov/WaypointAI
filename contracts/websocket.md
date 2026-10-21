@@ -155,11 +155,28 @@ Do not send raw SQL, provider credentials, arbitrary URLs, full tool arguments o
   "stepId": "step-2",
   "label": "Searching places: museum · Warszawa",
   "state": "done",
-  "detail": "found: 10"
+  "detail": "found: 10",
+  "durationMs": 312
 }
 ```
 
-One line of the progress feed the chat shows during a turn: understanding the request, classifying a follow-up about the trip plan, each tool call, assembling or writing the answer. Each `stepId` is sent first as `running`, then once as `done` or `failed`, in the order the steps happen. Labels name the tool and at most a few short plain argument values (kind, city, place, days); never full arguments. `turn.status` is still sent for clients that show a single line.
+One line of the progress feed the chat shows during a turn: understanding the request, the team lessons applied to this message ("Lessons applied: 2", with their titles in `detail`), classifying a follow-up about the trip plan, each tool call, assembling or writing the answer. Each `stepId` is sent first as `running`, then once as `done` or `failed`, in the order the steps happen. Labels name the tool and at most a few short plain argument values (kind, city, place, days); never full arguments. `done` and `failed` carry `durationMs`, the step's wall time on the server. `turn.status` is still sent for clients that show a single line.
+
+### `turn.progress`
+
+```json
+{
+  "protocolVersion": 1,
+  "type": "turn.progress",
+  "requestId": "req-001",
+  "stepId": "step-1",
+  "phase": "generating",
+  "tokens": 23,
+  "tokensPerSecond": 11.4
+}
+```
+
+Progress of a model call inside the latest running step. `reading` is sent when the call starts (the model reads the prompt; no token yet); `generating` follows with the tokens received so far and their rate, at most four times a second. Every model call is streamed for this, but the text of a call that only picks a tool is never sent. When the runtime parses a tool call before sending it, the tokens of that call arrive at once at the end.
 
 ### `assistant.delta`
 
@@ -228,9 +245,12 @@ Clarification completes the current turn. The next user answer is a new `turn.su
   },
   "sources": [
     { "id": "osm-mazovia", "label": "Regional OpenStreetMap extract", "mode": "public_snapshot" }
-  ]
+  ],
+  "models": ["qwen3:4b-instruct-2507-q4_K_M"]
 }
 ```
+
+`models` lists the models the turn called, in order of first use (for example a fine-tuned router, then the main model); the chat shows it in the answer's header.
 
 `records` is capped (MVP default 50); `places` optionally contains matched named map features; `total` is the backend's total before cap for the objects found by tools. For bigger result sets use pagination in a later contract. `mapFeatures` are GeoJSON `FeatureCollection` values with point/zone geometry and safe properties referencing record/place IDs; do not put private source fields in map properties.
 

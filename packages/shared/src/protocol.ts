@@ -178,13 +178,18 @@ export type ServerFrame =
   | (ClientBase & { type: "turn.status"; phase: "understanding" | "searching" | "composing"; label: string })
   /** Progress of an import job of the connection's workspace; requestId is the job ID. */
   | (ClientBase & { type: "import.progress"; job: ImportJob })
-  /** One line of the progress feed: the same stepId is sent as running, then done or failed. */
-  | (ClientBase & { type: "turn.step"; stepId: string; label: string; state: "running" | "done" | "failed"; detail?: string })
+  /** One line of the progress feed: the same stepId is sent as running, then done or failed with its duration. */
+  | (ClientBase & { type: "turn.step"; stepId: string; label: string; state: "running" | "done" | "failed"; detail?: string; durationMs?: number })
+  /**
+   * Progress of the model call inside a running step, at most four times a second: reading the prompt (no token yet),
+   * then generating with the tokens so far and their rate. The text of a call that only picks a tool is never sent.
+   */
+  | (ClientBase & { type: "turn.progress"; stepId: string; phase: "reading" | "generating"; tokens: number; tokensPerSecond?: number })
   | (ClientBase & { type: "tool.started"; tool: ToolName; label: string })
   | (ClientBase & { type: "tool.completed"; tool: ToolName; recordsFound: number })
   | (ClientBase & { type: "assistant.delta"; text: string })
   | (ClientBase & { type: "turn.clarification"; conversationId: string; message: string; choices: Array<{ id: string; label: string }> })
-  | (ClientBase & { type: "turn.completed"; conversationId: string; assistantMessage: string; appliedFilters: Array<Record<string, unknown>>; result: { total: number; records: RecordView[]; places?: PlaceView[]; tripPlan?: TripPlan; searchArea?: SearchArea; mapFeatures: GeoJSON.FeatureCollection }; sources: SourceView[]; citations?: Citation[]; citationsMode?: "cited" | "shown_to_model" })
+  | (ClientBase & { type: "turn.completed"; conversationId: string; assistantMessage: string; appliedFilters: Array<Record<string, unknown>>; result: { total: number; records: RecordView[]; places?: PlaceView[]; tripPlan?: TripPlan; searchArea?: SearchArea; mapFeatures: GeoJSON.FeatureCollection }; sources: SourceView[]; citations?: Citation[]; citationsMode?: "cited" | "shown_to_model"; models?: string[] })
   | (ClientBase & { type: "turn.cancelled" })
   | (ClientBase & { type: "turn.error"; code: string; message: string; retryable: boolean })
   | (ClientBase & { type: "voice.ready" })

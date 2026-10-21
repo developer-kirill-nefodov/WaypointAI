@@ -27,6 +27,7 @@ The model runs through a locally managed Ollama service. It can request a small 
 - Optional live voice dictation through OpenAI (disabled by default; the only feature that sends data off the machine). See [Voice input](#voice-input-demo-opt-in).
 - One map page with three modes: **Assistant** (the chat), **Events** (imported INGV and USGS earthquakes by period, magnitude, and source, cross-checked between the catalogues, with a period summary and details linked to nearby OSM places), and **Places** (the place catalog by country, city, and category). Any event or place can be handed to the assistant with "Ask the assistant": it becomes the selected map point and a ready question is offered. See [Map and events](#map-and-events-demo).
 - A **Data** page to explore, import, and delete datasets: every record page by page beside a map, countries and cities, and the import history.
+- A **Training** page to teach the assistant without changing model weights and to measure the effect. *Lessons* are rules ("always name the data source") and approved examples (a question and the right tool call or answer); the backend adds the enabled rules and the examples most similar to the message to the prompt, below every system rule, and the chat's progress feed shows which lessons applied. Lessons that try to override instructions or contain SQL, links, or code are refused, and an example's arguments are validated by that tool's own schema. The *exam* asks a set of questions as fresh chats (not stored) and checks the tool, its arguments, the answer's language, required and forbidden words, citations, and length; runs with and without lessons are drawn as a learning curve and compared question by question. See [Training](#training-lessons-and-exam).
 
 The included OpenStreetMap extracts cover selected regions in Germany, Poland, Romania, France, Italy, and Spain; coverage is not complete in every country. Event records are imported on demand from INGV and USGS; an optional synthetic event set for offline demos is clearly labelled.
 
@@ -85,6 +86,40 @@ npm run dev
 
 The frontend runs at `http://127.0.0.1:5173` (pages: `/`, `/map` with `?mode=events` or `?mode=places`, `/data`, `/model`; the former `/investigation` opens the events mode); the API health endpoint is `http://127.0.0.1:8000/api/v1/healthz`. Model weights, Ollama runtime files, map extracts, and local environment values are excluded from Git. Setup scripts do not run automatically when the app starts. See [model configuration](docs/local-model-setup.md) for environment settings.
 
+## Training: benchmark, journal, fine-tuning
+
+The model's job in this app is to understand a request in any language and pick the right tool with the right
+arguments; the answers are mostly assembled by the server. Training is therefore a loop around that job:
+
+1. **Benchmark** (`/model?tab=quality`). Cases are generated from the local database (templates in Russian, English,
+   and German × real cities and towns), so the right call is known in advance, plus hand-written hard cases (inflected
+   exonyms such as "в Риме" → Roma, typos, mixed languages, requests no tool serves). A run checks only the first tool
+   call (*tool choice* with the full prompt, or *router* with the short router prompt) or the whole turn. Results are
+   shown per skill and language with 95% intervals, so noise is not mistaken for progress.
+2. **Journal** (`/model?tab=data`). Every chat turn is kept on this machine (`turn_journal`, deleted after
+   `JOURNAL_RETENTION_DAYS`, default 30; `JOURNAL_ENABLED=false` switches it off) with failure signals: empty results,
+   settlements not found, invalid arguments, a first answer without a tool, a rewording in the next message, and 👎
+   from the chat. A person confirms the right call for such turns; it joins the benchmark and the training data.
+   Settlement aliases (Норча → Norcia) are resolved by the server without the model, and data gaps (towns asked for
+   but not imported) are listed with an import button.
+3. **Fine-tuning** (`/model?tab=finetune`, `model/training/`). A small model (Qwen3 0.6B or 1.7B) is trained with
+   LoRA as the **router**: it picks the first tool call from a short prompt and answers with JSON
+   (`backend/src/assistant/router.ts`). The dataset is synthetic (another seed than the benchmark, benchmark questions
+   left out) plus confirmed journal turns, so it contains no unreviewed user data. The page builds the dataset, runs
+   `train_router.py` in a local Python environment, shows the loss, and publishes the merged model to Ollama; the
+   benchmark in router mode decides whether it is used (`ROUTER_MODEL` in `.env`).
+
+On this laptop the local model generates about 2 tokens per second on the integrated GPU, so a turn spends most of its
+time writing even a short tool call; a smaller router model is the main lever for speed.
+
+### Lessons and exam (earlier approach)
+
+Open **Model** (`/model`; the old `/training` links redirect there). The **Overview** tab shows what the runtime reports about the model, how a turn runs (router or main model, server tool, cited answer), the main model's latest benchmark, and its training path. Prompt lessons are under **Quality → Advanced**. Load the starter exam (12 questions in Russian, English, and German), run it **without lessons** for a baseline, add rules or examples for what failed, and run it **with lessons**. Each run is stored with the lessons that were enabled, so the curve shows what changed the score. "Which lessons a message gets" shows the exact text added to the prompt without calling the model.
+
+- The exam shares the local model with the chat: while it runs (about half a minute per question on a laptop), a chat message waits or gets "busy", and the exam waits for a chat turn to finish.
+- Lessons and runs live in PostgreSQL (`lessons`, `eval_cases`, `eval_runs`, `eval_results`). Editing and starting runs need `TRAINING_ENABLED=true`; when unset it is on only with `NODE_ENV=development`, because there is no authentication and lessons reach every user's assistant.
+- This changes the prompt, not the model. Fine-tuning weights (LoRA) is a separate, later step; the approved examples are the dataset it would start from.
+
 ## Data and privacy boundaries
 
 The browser talks only to the backend. The backend is the only component that connects to Ollama and PostgreSQL. Model tool calls are validated, read-only, and bounded. Apart from the opt-in voice input, chat text never leaves the machine; the routing provider receives coordinates only. Conversation retention and the single-workspace demo limitations are documented in the [backend guide](docs/backend.md).
@@ -109,6 +144,10 @@ The **Map** page has one map and a side panel with three modes. **Events** searc
 | `EVENT_IMPORT_COOLDOWN_SECONDS` | `600` | Minimum time between imports of one source |
 | `EVENT_IMPORT_TIMEOUT_MS` | `20000` | Timeout per upstream attempt |
 | `INVESTIGATION_IMPORT_ENABLED` | `false` | Enables `POST /investigations/import/{sourceId}`; there is no authentication |
+| `TRAINING_ENABLED` | on in development only | Editing lessons, benchmark questions, journal reviews, aliases, and starting benchmark and fine-tuning runs; there is no authentication |
+| `JOURNAL_ENABLED` | `true` | Keeps chat turns in the local journal for review |
+| `JOURNAL_RETENTION_DAYS` | `30` | Journal entries older than this are deleted |
+| `ROUTER_MODEL` | unset | An Ollama model that picks the first tool call from the short router prompt (for example a fine-tuned `waypoint-router:<id>`) |
 | `TRUST_PROXY` | `false` | Reverse-proxy hop count for per-client rate limits |
 
 Start with these two documents:

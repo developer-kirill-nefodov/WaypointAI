@@ -19,7 +19,7 @@ const recordDetailsArgs = z.object({ id: z.string().min(1).max(120) }).strict();
 export const PLACE_KINDS: Record<string, readonly (string | undefined)[]> = { ...TRIP_STOP_CATEGORIES, hotel: ["tourism:hotel"], any: [undefined] };
 const SIGHTSEEING = [...TRIP_STOP_CATEGORIES.attraction, ...TRIP_STOP_CATEGORIES.museum];
 
-const searchPlacesArgs = z.object({
+export const searchPlacesArgs = z.object({
   query: z.string().max(100).optional(),
   kind: z.enum(Object.keys(PLACE_KINDS) as [string, ...string[]]).optional(),
   category: z.string().max(120).optional(),

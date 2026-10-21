@@ -131,7 +131,13 @@
         {
           "allOf": [
             { "$ref": "#/$defs/base" },
-            { "type": "object", "required": ["requestId", "stepId", "label", "state"], "properties": { "type": { "const": "turn.step" }, "stepId": { "type": "string", "maxLength": 40 }, "label": { "type": "string", "maxLength": 160 }, "state": { "enum": ["running", "done", "failed"] }, "detail": { "type": "string", "maxLength": 160 } } }
+            { "type": "object", "required": ["requestId", "stepId", "label", "state"], "properties": { "type": { "const": "turn.step" }, "stepId": { "type": "string", "maxLength": 40 }, "label": { "type": "string", "maxLength": 160 }, "state": { "enum": ["running", "done", "failed"] }, "detail": { "type": "string", "maxLength": 160 }, "durationMs": { "type": "integer", "minimum": 0 } } }
+          ]
+        },
+        {
+          "allOf": [
+            { "$ref": "#/$defs/base" },
+            { "type": "object", "required": ["requestId", "stepId", "phase", "tokens"], "properties": { "type": { "const": "turn.progress" }, "stepId": { "type": "string", "maxLength": 40 }, "phase": { "enum": ["reading", "generating"] }, "tokens": { "type": "integer", "minimum": 0 }, "tokensPerSecond": { "type": "number", "minimum": 0 } } }
           ]
         },
         {
@@ -243,7 +249,8 @@
                 },
                 "sources": { "type": "array", "items": { "$ref": "#/$defs/source" } },
                 "citations": { "type": "array", "maxItems": 20, "items": { "$ref": "#/$defs/citation" } },
-                "citationsMode": { "enum": ["cited", "shown_to_model"] }
+                "citationsMode": { "enum": ["cited", "shown_to_model"] },
+                "models": { "type": "array", "maxItems": 4, "items": { "type": "string", "maxLength": 120 }, "description": "Models this turn called, in order of first use." }
               }
             }
           ]

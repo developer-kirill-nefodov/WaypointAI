@@ -455,10 +455,967 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/training/status": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Whether lessons and the exam can be edited, the model, and the running exam */
+        get: operations["getTrainingStatus"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/training/model": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * The configured model as the local runtime describes it, with our runtime settings
+         * @description Read by the server from Ollama /api/show and /api/version (the browser never reaches Ollama) and cached for 10 minutes. Only known metadata fields are returned; links are kept only on huggingface.co, github.com, and qwenlm.github.io.
+         */
+        get: operations["getModelCard"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/training/lessons": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** All lessons (rules and approved examples) */
+        get: operations["listLessons"];
+        put?: never;
+        /**
+         * Create a lesson
+         * @description Text that tries to override instructions, contains SQL, URLs, or code fences is refused (forbidden_text). An example needs a tool call, an answer, or both; its arguments are validated with that tool's own schema (invalid_example_args), so an example cannot teach coordinates or other fields the tool refuses.
+         */
+        post: operations["createLesson"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/training/lessons/{id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        /** Delete a lesson */
+        delete: operations["deleteLesson"];
+        options?: never;
+        head?: never;
+        /** Replace a lesson (a new version) or switch it on or off */
+        patch: operations["updateLesson"];
+        trace?: never;
+    };
+    "/api/v1/training/lessons/preview": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Which lessons a message would get, and the text the model would see; nothing is sent to the model */
+        post: operations["previewLessons"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/training/cases": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Exam cases */
+        get: operations["listExamCases"];
+        put?: never;
+        /** Add an exam case */
+        post: operations["createExamCase"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/training/cases/generate": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Generate benchmark cases from the database and add the hand-written hard cases
+         * @description Replaces earlier generated cases with a new set built from templates in Russian, English, and German and real settlements (cities for places and trips, Central Italian towns for events), so the right tool call of each case is known. Hard cases (exonyms, typos, mixed languages, requests no tool serves) are added when missing. The same seed and data give the same set.
+         */
+        post: operations["generateBenchmark"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/training/cases/starter": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Add the built-in starter exam cases that are missing; edited ones are kept */
+        post: operations["addStarterExamCases"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/training/cases/{id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        /** Delete a case; past results keep the question as it was asked */
+        delete: operations["deleteExamCase"];
+        options?: never;
+        head?: never;
+        /** Replace a case or switch it on or off */
+        patch: operations["updateExamCase"];
+        trace?: never;
+    };
+    "/api/v1/training/runs": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** The last 50 exam runs, newest first */
+        get: operations["listExamRuns"];
+        put?: never;
+        /**
+         * Start an exam run in the background
+         * @description Asks every enabled case as a fresh chat turn (not stored in any conversation), with the enabled lessons or without any (to compare). One run at a time; the chat and the exam share the local model, so a busy model is waited for. Poll GET /runs/{id} for progress.
+         */
+        post: operations["startExamRun"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/training/runs/{id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** One run with the result of every case so far */
+        get: operations["getExamRun"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/training/runs/{id}/cancel": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Cancel the running exam; finished cases are kept */
+        post: operations["cancelExamRun"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/training/journal": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Chat turns kept on this machine, with failure signals; candidates are unreviewed turns that went wrong */
+        get: operations["listJournal"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/training/journal/{id}/review": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Confirm the right first call of a turn (it joins the benchmark and the training data) or dismiss it */
+        post: operations["reviewJournalEntry"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/training/journal/feedback": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Thumbs up or down for a chat answer (by its requestId); a thumbs-down marks the turn for review */
+        post: operations["sendAnswerFeedback"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/training/gaps": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Settlements users asked for that are not imported, and place searches that found nothing */
+        get: operations["getDataGaps"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/training/aliases": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Settlement aliases the server resolves without the model (Норча → Norcia) */
+        get: operations["listSettlementAliases"];
+        put?: never;
+        /** Add an alias for a settlement named exactly (local or English name) */
+        post: operations["addSettlementAlias"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/training/aliases/{alias}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        /** Remove an alias */
+        delete: operations["deleteSettlementAlias"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/training/finetune": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Router fine-tuning state, the dataset summary, and LoRA runs */
+        get: operations["getFinetuneState"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/training/finetune/dataset": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Build the router training dataset (synthetic questions with another seed than the benchmark, accepted teacher batches, and confirmed journal turns; benchmark questions are left out) */
+        post: operations["buildRouterDataset"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/training/finetune/runs": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Start LoRA fine-tuning of a small base model in a local Python process (model/training/train_router.py) */
+        post: operations["startLoraRun"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/training/finetune/runs/{id}/cancel": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Stop a running LoRA run */
+        post: operations["cancelLoraRun"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/training/finetune/runs/{id}/publish": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Register a finished run in Ollama as waypoint-router:<id>, in the background (merge an imported adapter, convert to GGUF Q8_0, ollama create); the run shows the stage in publishing and the result in publishedAs or publishError */
+        post: operations["publishLoraRun"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/training/finetune/runs/{id}/export": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Download a finished run as a package (tar with manifest.json, SHA-256 per file, the LoRA adapter, and for kind gguf the model ready for Ollama) */
+        get: operations["exportLoraRun"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/training/finetune/import": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Import a package as a new run. Only regular files under fixed names are accepted; sizes, checksums, the base model, and the weight headers (safetensors, GGUF) are checked before anything is kept */
+        post: operations["importLoraPackage"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/training/teacher": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** The teacher (an OpenAI model writing router training examples), its topics, today's usage, the running batch, and the batches */
+        get: operations["getTeacherState"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/training/teacher/batches": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Start a batch in the background; only synthetic instructions and settlement names are sent to OpenAI */
+        post: operations["startTeacherBatch"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/training/teacher/batches/{id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** A batch and its examples with the results of the checks */
+        get: operations["getTeacherBatch"];
+        put?: never;
+        post?: never;
+        /** Delete a batch's examples; the batch stays hidden and still counts toward the daily limit */
+        delete: operations["deleteTeacherBatch"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/training/teacher/batches/{id}/cancel": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Stop a generating batch; what was written stays reviewable */
+        post: operations["cancelTeacherBatch"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/training/teacher/batches/{id}/regenerate": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Replace the rejected examples with new ones, up to the requested size */
+        post: operations["regenerateTeacherBatch"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/training/teacher/batches/{id}/accept": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Accept a reviewed batch into the dataset (on its next build), or take it out again */
+        post: operations["acceptTeacherBatch"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/training/teacher/examples/{id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        /** Delete an example */
+        delete: operations["deleteTeacherExample"];
+        options?: never;
+        head?: never;
+        /** Edit an example (the checks run again; a passing edit counts as approved by a person) or approve a disputed one as it is */
+        patch: operations["editTeacherExample"];
+        trace?: never;
+    };
 }
 export type webhooks = Record<string, never>;
 export interface components {
     schemas: {
+        JournalEntry: {
+            /** Format: uuid */
+            id: string;
+            requestId: string;
+            conversationId: string;
+            language: string | null;
+            message: string;
+            model: string;
+            toolCalls: {
+                tool: string;
+                args: unknown;
+                error?: string | null;
+                resultCount?: number | null;
+            }[];
+            firstTool: string | null;
+            /** @enum {string} */
+            outcome: "completed" | "clarification" | "error" | "cancelled";
+            errorCode: string | null;
+            signals: {
+                emptyResult?: boolean;
+                placeNotFound?: string | null;
+                invalidArgs?: boolean;
+                retriedWithoutTool?: boolean;
+                rephrased?: boolean;
+            };
+            /** @enum {integer|null} */
+            feedback: 1 | -1 | null;
+            durationMs: number;
+            /** @enum {string} */
+            reviewStatus: "new" | "confirmed" | "dismissed";
+            corrected: {
+                tool?: string;
+                args?: Record<string, never>;
+            } | null;
+            /** Format: date-time */
+            createdAt: string;
+        };
+        JournalStats: {
+            total: number;
+            candidates: number;
+            confirmed: number;
+            thumbsUp: number;
+            thumbsDown: number;
+            failureShareWeek: number | null;
+        };
+        DatasetSummary: {
+            total: number;
+            bySkill: {
+                [key: string]: number;
+            };
+            byLanguage: {
+                [key: string]: number;
+            };
+            bySource: {
+                [key: string]: number;
+            };
+            /** @description Teacher examples per topic. */
+            byTopic?: {
+                [key: string]: number;
+            };
+            excludedAsBenchmark: number;
+            /** Format: date-time */
+            createdAt: string;
+            path: string;
+        };
+        LoraRun: {
+            id: string;
+            /** @enum {string} */
+            status: "running" | "succeeded" | "failed" | "cancelled";
+            phase: string;
+            baseModel: string;
+            epochs: number;
+            learningRate: number;
+            rank: number;
+            examples: number | null;
+            device: string | null;
+            step: number;
+            totalSteps: number | null;
+            /** @description Epochs done so far, fractional. */
+            epoch: number | null;
+            etaSeconds: number | null;
+            peakMemoryMb: number | null;
+            /** @description When each stage began: starting, loading, tokenized, training, saving, done, merging, converting, creating, published, benchmark, or imported. */
+            timeline: {
+                phase: string;
+                /** Format: date-time */
+                at: string;
+            }[];
+            losses: {
+                step: number;
+                loss: number | null;
+                validationLoss: number | null;
+            }[];
+            error: string | null;
+            /** Format: date-time */
+            startedAt: string;
+            /** Format: date-time */
+            finishedAt: string | null;
+            autoBenchmark: boolean;
+            publishedAs: string | null;
+            /** @enum {string|null} */
+            publishing: "merging" | "converting" | "creating" | null;
+            publishError: string | null;
+            benchmarkRunId: string | null;
+            benchmarkError: string | null;
+            imported: {
+                fromRunId: string;
+                /** @enum {string} */
+                kind: "adapter" | "gguf";
+                /** Format: date-time */
+                at: string;
+            } | null;
+            exports: {
+                adapter: boolean;
+                gguf: boolean;
+            };
+        };
+        TeacherState: {
+            /** @description OPENAI_API_KEY is set. */
+            available: boolean;
+            model: string;
+            topics: {
+                id: string;
+                title: {
+                    [key: string]: string;
+                };
+                description: {
+                    [key: string]: string;
+                };
+                tools: string[];
+            }[];
+            languages: ("ru" | "en" | "de")[];
+            usage: {
+                generatedToday: number;
+                dailyLimit: number;
+            };
+            progress: {
+                /** Format: uuid */
+                batchId: string;
+                done: number;
+                total: number;
+            } | null;
+            batches: components["schemas"]["TeacherBatch"][];
+        };
+        TeacherBatch: {
+            /** Format: uuid */
+            id: string;
+            topic: string;
+            languages: ("ru" | "en" | "de")[];
+            requested: number;
+            model: string;
+            crossCheck: boolean;
+            /** @enum {string} */
+            status: "generating" | "review" | "accepted" | "failed" | "cancelled";
+            errorCode: string | null;
+            promptTokens: number;
+            completionTokens: number;
+            counts: {
+                passed: number;
+                disputed: number;
+                rejected: number;
+                edited: number;
+            };
+            /** Format: date-time */
+            createdAt: string;
+            /** Format: date-time */
+            finishedAt: string | null;
+        };
+        TeacherExample: {
+            /** Format: uuid */
+            id: string;
+            /** Format: uuid */
+            batchId: string;
+            question: string;
+            /** @enum {string} */
+            language: "ru" | "en" | "de";
+            tool: string;
+            args: Record<string, never>;
+            /** @enum {string} */
+            status: "passed" | "disputed" | "rejected" | "edited";
+            reasons: {
+                /** @enum {string} */
+                code: "invalid_call" | "question_length" | "language_mismatch" | "off_topic" | "not_earthquakes" | "city_unknown" | "duplicate" | "benchmark_leak" | "city_corrected" | "cross_check_mismatch";
+                detail?: string;
+            }[];
+        };
+        FinetuneState: {
+            availability: {
+                python: boolean;
+                dataset: boolean;
+                /** @description llama.cpp's GGUF converter */
+                converter: boolean;
+            };
+            baseModels: string[];
+            dataset: components["schemas"]["DatasetSummary"] | null;
+            runs: components["schemas"]["LoraRun"][];
+            activeRunId: string | null;
+        };
+        ModelCard: {
+            name: string;
+            family: string | null;
+            version: string | null;
+            /** @description The developer's fine-tune of the base model, for example Instruct. */
+            finetune: string | null;
+            parameterCount: number | null;
+            parameterSize: string | null;
+            format: string | null;
+            quantization: string | null;
+            architecture: {
+                layers: number | null;
+                attentionHeads: number | null;
+                keyValueHeads: number | null;
+                embeddingLength: number | null;
+                feedForwardLength: number | null;
+            };
+            /** @description The model's maximum context; settings.contextLength is what the app uses. */
+            contextLength: number | null;
+            license: string | null;
+            /** Format: uri */
+            licenseUrl: string | null;
+            /** Format: uri */
+            modelUrl: string | null;
+            capabilities: string[];
+            /** Format: date-time */
+            installedAt: string | null;
+            runtimeVersion: string | null;
+            settings: {
+                contextLength: number;
+                maxAnswerTokens: number;
+                temperature: number;
+                keepAlive: string;
+            };
+        };
+        LessonInput: {
+            /** @constant */
+            kind: "rule";
+            topic: components["schemas"]["LessonTopic"];
+            title: string;
+            text: string;
+            enabled?: boolean;
+        } | {
+            /** @constant */
+            kind: "example";
+            topic: components["schemas"]["LessonTopic"];
+            title: string;
+            /** @description The user's question. */
+            text: string;
+            /** @enum {string|null} */
+            exampleTool?: "search_places" | "search_events" | "list_sources" | "plan_trip" | "reply" | null;
+            exampleArgs?: {
+                [key: string]: unknown;
+            } | null;
+            exampleAnswer?: string | null;
+            enabled?: boolean;
+        };
+        /** @enum {string} */
+        LessonTopic: "all" | "places" | "events" | "trips" | "sources";
+        Lesson: {
+            /** Format: uuid */
+            id: string;
+            /** @enum {string} */
+            kind: "rule" | "example";
+            topic: components["schemas"]["LessonTopic"];
+            title: string;
+            text: string;
+            /** @enum {string|null} */
+            exampleTool: "search_places" | "search_events" | "list_sources" | "plan_trip" | "reply" | null;
+            exampleArgs: {
+                [key: string]: unknown;
+            } | null;
+            exampleAnswer: string | null;
+            enabled: boolean;
+            version: number;
+            /** @description How many chat turns this lesson reached. */
+            appliedCount: number;
+            /** Format: date-time */
+            lastAppliedAt: string | null;
+            /** Format: date-time */
+            createdAt: string;
+            /** Format: date-time */
+            updatedAt: string;
+        };
+        AppliedLesson: {
+            id: string;
+            /** @enum {string} */
+            kind: "rule" | "example";
+            title: string;
+            /** @description Similarity of an example to the message; 1 for rules. */
+            score: number;
+        };
+        /** @description Each field present becomes one check; the answer's language is always checked. */
+        CaseExpectation: {
+            /** @enum {string} */
+            tool?: "search_places" | "search_events" | "list_sources" | "plan_trip" | "reply" | "search_records" | "get_record_details" | "edit_trip_plan";
+            /** @description Arguments the call must contain. Strings compare case-insensitively; a list accepts any of its values (a city by its local or English name); a dotted key reaches into nested values (cities.0.name). */
+            args?: {
+                [key: string]: (string | number | boolean) | string[];
+            };
+            mustInclude?: string[];
+            mustNotInclude?: string[];
+            /** @description The answer must cite rows ([E1], [P1]). */
+            citations?: boolean;
+            /** @description Every sentence that states a magnitude must cite its event ([E1]); a summary of a magnitude range does not count. */
+            citeEachEvent?: boolean;
+            maxSentences?: number;
+        };
+        ExamCaseInput: {
+            question: string;
+            /** @enum {string} */
+            language: "ru" | "en" | "de";
+            expect: components["schemas"]["CaseExpectation"];
+            enabled?: boolean;
+        };
+        ExamCase: {
+            id: string;
+            question: string;
+            /** @enum {string} */
+            language: "ru" | "en" | "de";
+            expect: components["schemas"]["CaseExpectation"];
+            enabled: boolean;
+            /** @enum {string} */
+            skill: "places" | "events" | "trips" | "sources" | "reply" | "other";
+            /** @enum {string} */
+            origin: "starter" | "manual" | "generated" | "hard" | "journal";
+        };
+        EvalRun: {
+            /** Format: uuid */
+            id: string;
+            /** @enum {string} */
+            status: "running" | "succeeded" | "failed" | "cancelled";
+            /** @enum {string} */
+            mode: "full" | "first_step" | "router";
+            caseOrigins: string[];
+            metrics: components["schemas"]["RunMetrics"] | null;
+            withLessons: boolean;
+            /** @description Lessons enabled when the run started. */
+            lessonIds: string[];
+            model: string;
+            label: string | null;
+            caseCount: number;
+            casesDone: number;
+            casesPassed: number;
+            checksTotal: number;
+            checksPassed: number;
+            /** @description Share of passed checks. */
+            score: number | null;
+            errorCode: string | null;
+            /** Format: date-time */
+            startedAt: string;
+            /** Format: date-time */
+            finishedAt: string | null;
+        };
+        /** @description A share of passed cases with its 95% Wilson interval. */
+        Share: {
+            passed: number;
+            total: number;
+            low: number;
+            high: number;
+        };
+        RunMetrics: {
+            overall: components["schemas"]["Share"];
+            bySkill: {
+                [key: string]: components["schemas"]["Share"];
+            };
+            byLanguage: {
+                [key: string]: components["schemas"]["Share"];
+            };
+            tool: components["schemas"]["Share"];
+            args: components["schemas"]["Share"];
+        };
+        EvalCheck: {
+            /** @enum {string} */
+            check: "completed" | "tool" | "args" | "language" | "mustInclude" | "mustNotInclude" | "citations" | "citeEachEvent" | "maxSentences";
+            passed: boolean;
+            expected?: unknown;
+            actual?: unknown;
+        };
+        EvalResult: {
+            caseId: string;
+            question: string;
+            skill: string;
+            language: string | null;
+            passed: boolean;
+            checks: components["schemas"]["EvalCheck"][];
+            toolCalls: {
+                tool: string;
+                args: unknown;
+            }[];
+            answer: string;
+            appliedLessons: components["schemas"]["AppliedLesson"][];
+            durationMs: number;
+            errorCode: string | null;
+        };
         HealthResponse: {
             /** @constant */
             status: "ok";
@@ -1990,6 +2947,1760 @@ export interface operations {
             };
             /** @description Too many requests; see Retry-After. */
             429: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
+    getTrainingStatus: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Training status. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        editEnabled: boolean;
+                        model: string;
+                        routerModel: string | null;
+                        installedModels: string[];
+                        activeRunId: string | null;
+                    };
+                };
+            };
+        };
+    };
+    getModelCard: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The model card. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        model: components["schemas"]["ModelCard"];
+                    };
+                };
+            };
+            /** @description The runtime or the model is unavailable, model_unavailable. */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
+    listLessons: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Lessons, rules first. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        lessons: components["schemas"]["Lesson"][];
+                    };
+                };
+            };
+        };
+    };
+    createLesson: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["LessonInput"];
+            };
+        };
+        responses: {
+            /** @description The lesson. */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        lesson: components["schemas"]["Lesson"];
+                    };
+                };
+            };
+            /** @description invalid_lesson, forbidden_text, example_needs_tool_or_answer, or invalid_example_args, with the field. */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Training is off (TRAINING_ENABLED; on by default only in development), training_disabled. */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
+    deleteLesson: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Deleted. */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Training is off (TRAINING_ENABLED; on by default only in development), training_disabled. */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Lesson not found. */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
+    updateLesson: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["LessonInput"] | {
+                    enabled: boolean;
+                };
+            };
+        };
+        responses: {
+            /** @description The lesson. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        lesson: components["schemas"]["Lesson"];
+                    };
+                };
+            };
+            /** @description Invalid ID or lesson. */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Training is off (TRAINING_ENABLED; on by default only in development), training_disabled. */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Lesson not found. */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
+    previewLessons: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": {
+                    message: string;
+                };
+            };
+        };
+        responses: {
+            /** @description Applied lessons and the prompt block (null when none apply). */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        applied: components["schemas"]["AppliedLesson"][];
+                        prompt: string | null;
+                    };
+                };
+            };
+        };
+    };
+    listExamCases: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Cases. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        cases: components["schemas"]["ExamCase"][];
+                    };
+                };
+            };
+        };
+    };
+    createExamCase: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ExamCaseInput"];
+            };
+        };
+        responses: {
+            /** @description The case. */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        case: components["schemas"]["ExamCase"];
+                    };
+                };
+            };
+            /** @description invalid_case. */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Training is off (TRAINING_ENABLED; on by default only in development), training_disabled. */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
+    generateBenchmark: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: {
+            content: {
+                "application/json": {
+                    /** @default 20 */
+                    perSkill?: number;
+                    /** @default 1 */
+                    seed?: number;
+                };
+            };
+        };
+        responses: {
+            /** @description How many cases were generated and how many hard cases were added. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        generated: number;
+                        hard: number;
+                    };
+                };
+            };
+            /** @description invalid_request. */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Training is off, training_disabled. */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description An exam is running, exam_running. */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
+    addStarterExamCases: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description How many were added. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        added: number;
+                    };
+                };
+            };
+            /** @description Training is off (TRAINING_ENABLED; on by default only in development), training_disabled. */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
+    deleteExamCase: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Deleted. */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Training is off (TRAINING_ENABLED; on by default only in development), training_disabled. */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Case not found. */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
+    updateExamCase: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ExamCaseInput"] | {
+                    enabled: boolean;
+                };
+            };
+        };
+        responses: {
+            /** @description The case. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        case: components["schemas"]["ExamCase"];
+                    };
+                };
+            };
+            /** @description Invalid ID or case. */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Training is off (TRAINING_ENABLED; on by default only in development), training_disabled. */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Case not found. */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
+    listExamRuns: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Runs and the running one. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        runs: components["schemas"]["EvalRun"][];
+                        activeRunId: string | null;
+                    };
+                };
+            };
+        };
+    };
+    startExamRun: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": {
+                    withLessons: boolean;
+                    label?: string;
+                    /**
+                     * @description first_step stops at the model's first tool call with the full prompt; router asks the router prompt (short, JSON answer); both check only the tool and its arguments.
+                     * @default full
+                     * @enum {string}
+                     */
+                    mode?: "full" | "first_step" | "router";
+                    /** @description Another installed model to measure (unknown_model otherwise). In router mode it defaults to ROUTER_MODEL, then the main model. */
+                    model?: string;
+                    /** @description Which cases to ask; empty or missing asks every enabled case. */
+                    origins?: ("starter" | "manual" | "generated" | "hard" | "journal")[];
+                };
+            };
+        };
+        responses: {
+            /** @description The run, before any case is asked. */
+            202: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        run: components["schemas"]["EvalRun"];
+                    };
+                };
+            };
+            /** @description invalid_run. */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Training is off (TRAINING_ENABLED; on by default only in development), training_disabled. */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description exam_running, or no_cases when no case is enabled. */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
+    getExamRun: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The run and its results. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        run: components["schemas"]["EvalRun"];
+                        results: components["schemas"]["EvalResult"][];
+                    };
+                };
+            };
+            /** @description Invalid ID. */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Run not found. */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
+    cancelExamRun: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Cancelling. */
+            202: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Training is off (TRAINING_ENABLED; on by default only in development), training_disabled. */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description not_running. */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
+    listJournal: {
+        parameters: {
+            query?: {
+                filter?: "candidates" | "all" | "confirmed";
+                limit?: number;
+                offset?: number;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Entries and journal statistics. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        total: number;
+                        entries: components["schemas"]["JournalEntry"][];
+                        stats: components["schemas"]["JournalStats"];
+                    };
+                };
+            };
+            /** @description invalid_query. */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
+    reviewJournalEntry: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": {
+                    /** @constant */
+                    status: "confirmed";
+                    /** @enum {string} */
+                    tool: "search_places" | "search_events" | "list_sources" | "plan_trip" | "reply";
+                    args?: Record<string, never>;
+                    /** @default true */
+                    addToBenchmark?: boolean;
+                } | {
+                    /** @constant */
+                    status: "dismissed";
+                };
+            };
+        };
+        responses: {
+            /** @description The reviewed entry. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        entry: components["schemas"]["JournalEntry"];
+                    };
+                };
+            };
+            /** @description invalid_review, or invalid_example_args when the tool would refuse the arguments. */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Training is off, training_disabled. */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Entry not found. */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
+    sendAnswerFeedback: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": {
+                    requestId: string;
+                    /** @enum {integer|null} */
+                    rating: 1 | -1 | null;
+                };
+            };
+        };
+        responses: {
+            /** @description Saved. */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description invalid_feedback. */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description The turn is not in the journal. */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
+    getDataGaps: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Gaps, most frequent first. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        missingPlaces: {
+                            name: string;
+                            count: number;
+                            /** Format: date-time */
+                            lastAt: string;
+                        }[];
+                        emptySearches: {
+                            city: string;
+                            kind: string | null;
+                            count: number;
+                        }[];
+                    };
+                };
+            };
+        };
+    };
+    listSettlementAliases: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Aliases. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        aliases: {
+                            alias: string;
+                            placeId: string;
+                            name: string;
+                            countryCode: string | null;
+                            origin: string;
+                            /** Format: date-time */
+                            createdAt: string;
+                        }[];
+                    };
+                };
+            };
+        };
+    };
+    addSettlementAlias: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": {
+                    alias: string;
+                    settlement: string;
+                };
+            };
+        };
+        responses: {
+            /** @description The alias and its settlement. */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        alias: string;
+                        settlement: {
+                            id: string;
+                            name: string;
+                        };
+                    };
+                };
+            };
+            /** @description invalid_alias. */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Training is off, training_disabled. */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description settlement_not_found. */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description alias_is_a_settlement: the alias already names another settlement. */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
+    deleteSettlementAlias: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                alias: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Removed. */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Training is off, training_disabled. */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Alias not found. */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
+    getFinetuneState: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description State. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["FinetuneState"];
+                };
+            };
+        };
+    };
+    buildRouterDataset: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: {
+            content: {
+                "application/json": {
+                    /** @default 150 */
+                    perSkill?: number;
+                    /** @default 1000 */
+                    seed?: number;
+                };
+            };
+        };
+        responses: {
+            /** @description The dataset summary. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        dataset: components["schemas"]["DatasetSummary"];
+                    };
+                };
+            };
+            /** @description Training is off, training_disabled. */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description training_running. */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
+    startLoraRun: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": {
+                    /** @enum {string} */
+                    baseModel: "Qwen/Qwen3-0.6B" | "Qwen/Qwen3-1.7B";
+                    /** @default 2 */
+                    epochs?: number;
+                    /** @default 0.0002 */
+                    learningRate?: number;
+                    /**
+                     * @default 16
+                     * @enum {integer}
+                     */
+                    rank?: 8 | 16 | 32;
+                    /**
+                     * @description Publish to Ollama and start the router benchmark once training succeeds.
+                     * @default false
+                     */
+                    autoBenchmark?: boolean;
+                };
+            };
+        };
+        responses: {
+            /** @description The run. */
+            202: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        run: components["schemas"]["LoraRun"];
+                    };
+                };
+            };
+            /** @description invalid_run. */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Training is off, training_disabled. */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description training_running, python_missing, or dataset_missing. */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
+    cancelLoraRun: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Stopping. */
+            202: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Training is off, training_disabled. */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description not_running. */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
+    publishLoraRun: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The run, with publishing set. */
+            202: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        run: components["schemas"]["LoraRun"];
+                    };
+                };
+            };
+            /** @description Training is off, training_disabled. */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description run_not_finished, publish_running, converter_missing, or python_missing. */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
+    exportLoraRun: {
+        parameters: {
+            query: {
+                kind: "adapter" | "gguf";
+            };
+            header?: never;
+            path: {
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The package. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/x-tar": string;
+                };
+            };
+            /** @description invalid_request. */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Training is off, training_disabled. */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description run_not_finished or export_unavailable (no GGUF until the run is published). */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
+    importLoraPackage: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/x-tar": string;
+            };
+        };
+        responses: {
+            /** @description The new run. */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        run: components["schemas"]["LoraRun"];
+                    };
+                };
+            };
+            /** @description Training is off, training_disabled. */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description import_running. */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description too_large (over 7 GB). */
+            413: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description unsupported_media_type. */
+            415: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description not_a_package, unexpected_entry, checksum_mismatch, unsupported_base_model, invalid_weights, or missing_file. */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
+    getTeacherState: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description State. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["TeacherState"];
+                };
+            };
+        };
+    };
+    startTeacherBatch: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": {
+                    /** @enum {string} */
+                    topic: "exonyms" | "places" | "events" | "trips" | "chat" | "mixed";
+                    languages: ("ru" | "en" | "de")[];
+                    count: number;
+                    /**
+                     * @description The teacher answers every passed question again blind; a different call marks the example disputed.
+                     * @default false
+                     */
+                    crossCheck?: boolean;
+                };
+            };
+        };
+        responses: {
+            /** @description The batch. */
+            202: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        batch: components["schemas"]["TeacherBatch"];
+                    };
+                };
+            };
+            /** @description invalid_batch. */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Training is off, training_disabled. */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description teacher_running or teacher_unavailable (no OPENAI_API_KEY). */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description daily_limit, with remaining. */
+            429: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
+    getTeacherBatch: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The batch. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        batch: components["schemas"]["TeacherBatch"];
+                        examples: components["schemas"]["TeacherExample"][];
+                    };
+                };
+            };
+            /** @description not_found. */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
+    deleteTeacherBatch: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Deleted. */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Training is off, training_disabled. */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description batch_busy (generating or already deleted). */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
+    cancelTeacherBatch: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Stopping. */
+            202: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Training is off, training_disabled. */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description not_running. */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
+    regenerateTeacherBatch: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The batch. */
+            202: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        batch: components["schemas"]["TeacherBatch"];
+                    };
+                };
+            };
+            /** @description Training is off, training_disabled. */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description not_found. */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description batch_busy, nothing_to_regenerate, or teacher_running. */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description daily_limit. */
+            429: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
+    acceptTeacherBatch: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": {
+                    accepted: boolean;
+                };
+            };
+        };
+        responses: {
+            /** @description The batch. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        batch: components["schemas"]["TeacherBatch"];
+                    };
+                };
+            };
+            /** @description Training is off, training_disabled. */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description not_found. */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description batch_busy. */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
+    deleteTeacherExample: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Deleted. */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Training is off, training_disabled. */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description not_found. */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
+    editTeacherExample: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": {
+                    question?: string;
+                    /** @enum {string} */
+                    language?: "ru" | "en" | "de";
+                    /** @enum {string} */
+                    tool?: "search_places" | "search_events" | "plan_trip" | "list_sources" | "reply";
+                    args?: Record<string, never>;
+                    approve?: boolean;
+                };
+            };
+        };
+        responses: {
+            /** @description The example. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        example: components["schemas"]["TeacherExample"];
+                    };
+                };
+            };
+            /** @description invalid_example. */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Training is off, training_disabled. */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description not_found. */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description batch_busy or not_disputed. */
+            409: {
                 headers: {
                     [name: string]: unknown;
                 };

@@ -4,8 +4,22 @@ import type { Citation, PlaceView, RecordView } from "@waypoint-ai/shared";
 const SOURCE_PAGE_HOSTS = new Set(["terremoti.ingv.it", "earthquake.usgs.gov", "www.openstreetmap.org"]);
 const MAX_CITATIONS = 20;
 const OSM_PLACE_ID = /^osm:(node|way|relation):(\d{1,20})$/;
-/** A bracket holding one or more refs: [E1], [P2], [E1, E3]. */
-const REF_GROUP = /\s?\[((?:[EP]\d{1,3})(?:\s*[,;]\s*[EP]\d{1,3})*)\]/g;
+/** A bracket holding one or more refs or ranges: [E1], [P2], [E1, E3], [E1–E8]. */
+const REF = "[EP]\\d{1,3}(?:\\s*[-–—]\\s*[EP]?\\d{1,3})?";
+const REF_GROUP = new RegExp(`\\s?\\[(${REF}(?:\\s*[,;]\\s*${REF})*)\\]`, "g");
+const MAX_RANGE = 20;
+
+/** The refs a group names; a range ("E1–E8") stands for every ref in it. */
+function expandGroup(group: string): string[] {
+  return group.split(/\s*[,;]\s*/).flatMap((part) => {
+    const range = /^([EP])(\d{1,3})\s*[-–—]\s*(?:[EP])?(\d{1,3})$/.exec(part);
+    if (!range) return [part];
+    const [, letter, from, to] = range;
+    const start = Number(from);
+    const end = Math.min(Number(to), start + MAX_RANGE - 1);
+    return end >= start ? Array.from({ length: end - start + 1 }, (_, index) => `${letter}${start + index}`) : [part];
+  });
+}
 
 /**
  * Short refs (E1 for events and records, P1 for places) for the rows a tool showed the model in one turn. The model
@@ -74,7 +88,7 @@ export class CitationRegistry {
   resolve(text: string): { text: string; citations: Citation[]; citationsMode?: "cited" | "shown_to_model" } {
     const cited: Citation[] = [];
     const cleaned = text.replace(REF_GROUP, (match, group: string) => {
-      const known = group.split(/\s*[,;]\s*/).flatMap((ref) => this.#byRef.get(ref) ?? []);
+      const known = expandGroup(group).flatMap((ref) => this.#byRef.get(ref) ?? []);
       for (const citation of known) if (!cited.includes(citation)) cited.push(citation);
       return known.length ? `${match.startsWith(" ") ? " " : ""}${known.map((citation) => `[${citation.ref}]`).join("")}` : "";
     });

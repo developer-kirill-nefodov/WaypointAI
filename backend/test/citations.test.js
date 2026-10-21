@@ -49,4 +49,10 @@ test("place lists carry refs, and stored history has none", () => {
   const resolved = registry.resolve(message);
   assert.deepEqual(resolved.citations.map((citation) => citation.url), ["https://www.openstreetmap.org/node/1", null]);
   assert.equal(stripCitationRefs("Museum [P1] and park [P2, E3]."), "Museum and park.");
+  // Models also cite ranges; each ref in a range is checked like a single one.
+  const ranged = new CitationRegistry();
+  ranged.annotate({ events: [{ id: "demo:1" }, { id: "demo:2" }, { id: "demo:3" }] }, { records: [event("demo:1", null), event("demo:2", null), event("demo:3", null)] });
+  const resolvedRange = ranged.resolve("Eleven events [E1–E8], strongest [E2-3].");
+  assert.equal(resolvedRange.text, "Eleven events [E1][E2][E3], strongest [E2][E3].");
+  assert.equal(stripCitationRefs("Events [E1–E8]."), "Events.");
 });

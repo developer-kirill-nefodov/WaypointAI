@@ -42,6 +42,8 @@ before(async () => {
     places: await import("../src/data/record.repository.ts"),
     importJobs: (await import("../src/data/import-job.repository.ts")).sqlImportJobStore,
     datasets: await import("../src/data/dataset.repository.ts"),
+    training: await import("../src/data/training.repository.ts"),
+    teacher: await import("../src/data/teacher.repository.ts"),
   };
   await resetData();
 });
@@ -405,4 +407,63 @@ test("matches events across live catalogues, reports their cross-check, merges c
   // Deleting a record removes its matches.
   await sql("DELETE FROM records WHERE source_id = 'test-live-b'");
   assert.equal((await sql("SELECT count(*)::integer AS n FROM record_matches"))[0].n, 0);
+});
+
+test("stores lessons with versions, exam cases, and runs whose totals follow their results", { skip }, async () => {
+  const { training } = modules;
+  await sql("DELETE FROM eval_runs");
+  await sql("DELETE FROM eval_cases");
+  await sql("DELETE FROM lessons");
+  const rule = await training.createLesson({ kind: "rule", topic: "all", title: "Source", text: "Name the data source." });
+  const example = await training.createLesson({ kind: "example", topic: "events", title: "Synthetic", text: "Events near Testopoli?", exampleTool: "search_events", exampleArgs: { place: "Testopoli" } });
+  assert.deepEqual((await training.enabledLessons()).map((lesson) => lesson.id), [rule.id, example.id]);
+  const edited = await training.updateLesson(rule.id, { kind: "rule", topic: "events", title: "Source", text: "Name the catalogue." });
+  assert.equal(edited.version, 2);
+  assert.equal((await training.updateLesson(example.id, { enabled: false })).enabled, false);
+  // The enabled-lesson cache is dropped on every change.
+  assert.deepEqual((await training.enabledLessons()).map((lesson) => lesson.id), [rule.id]);
+  await training.markLessonsApplied([rule.id]);
+  assert.equal((await training.listLessons()).find((lesson) => lesson.id === rule.id).appliedCount, 1);
+
+  assert.equal(await training.addMissingCases([{ id: "case-a", question: "Synthetic?", language: "en", enabled: true, expect: { tool: "reply" } }]), 1);
+  assert.equal(await training.addMissingCases([{ id: "case-a", question: "Changed", language: "en", enabled: true, expect: {} }]), 0);
+  assert.equal((await training.listCases())[0].question, "Synthetic?");
+
+  const run = await training.createRun({ withLessons: true, lessonIds: [rule.id], model: "test", label: null, caseCount: 2, mode: "full", caseOrigins: [] });
+  const result = (caseId, passed) => ({ caseId, question: "q", passed, checks: [{ check: "tool", passed }, { check: "language", passed: true }], toolCalls: [], answer: "a", appliedLessons: [], durationMs: 5, errorCode: null, skill: "reply", language: "en" });
+  await training.addResult(run.id, result("case-a", true));
+  const after = await training.addResult(run.id, result("case-b", false));
+  assert.deepEqual([after.casesDone, after.casesPassed, after.checksTotal, after.checksPassed, after.score], [2, 1, 4, 3, 0.75]);
+  await training.finishRun(run.id, "succeeded");
+  const stored = await training.getRun(run.id);
+  assert.equal(stored.run.status, "succeeded");
+  assert.deepEqual(stored.results.map((item) => item.caseId), ["case-a", "case-b"]);
+  assert.equal(await training.deleteLesson(example.id), true);
+});
+
+test("keeps teacher batches with checked examples, accepts them into the dataset, and counts deleted ones for the limit", { skip }, async () => {
+  const { teacher } = modules;
+  await sql("DELETE FROM teacher_batches");
+  const batch = await teacher.createBatch({ topic: "places", languages: ["en", "de"], requested: 3, model: "test", crossCheck: false });
+  const example = (question, status, reasons = []) => ({ question, language: "en", call: { tool: "search_places", args: { kind: "museum", city: "Testopoli" } }, status, reasons });
+  await teacher.insertExamples(batch.id, [example("Museums in Testopoli", "passed"), example("Museums in Nowhere", "rejected", [{ code: "city_unknown", detail: "Nowhere" }]), example("Museum Testopoli?", "disputed")]);
+  await teacher.updateBatch(batch.id, { status: "review", usage: { promptTokens: 100, completionTokens: 50 }, finished: true });
+  const stored = await teacher.getBatch(batch.id);
+  assert.deepEqual(stored.counts, { passed: 1, disputed: 1, rejected: 1, edited: 0 });
+  assert.equal(stored.promptTokens, 100);
+  assert.deepEqual((await teacher.listExamples(batch.id)).find((item) => item.status === "rejected").reasons, [{ code: "city_unknown", detail: "Nowhere" }]);
+  // Only accepted batches feed the dataset, and only examples that passed or were approved.
+  assert.equal((await teacher.acceptedExamples()).length, 0);
+  await teacher.updateBatch(batch.id, { status: "accepted" });
+  assert.deepEqual((await teacher.acceptedExamples()).map((item) => [item.question, item.topic]), [["Museums in Testopoli", "places"]]);
+  assert.equal(await teacher.deleteRejected(batch.id), 1);
+  assert.deepEqual((await teacher.knownQuestions()).sort(), ["Museum Testopoli?", "Museums in Testopoli"]);
+  await teacher.updateBatch(batch.id, { status: "review", generated: 1 });
+  assert.equal(await teacher.generatedToday(), 4);
+  assert.equal(await teacher.deleteBatch(batch.id), true);
+  assert.equal(await teacher.getBatch(batch.id), null);
+  assert.equal((await teacher.listBatches()).length, 0);
+  // A deleted batch's examples are gone, but what it cost still counts today.
+  assert.equal(await teacher.generatedToday(), 4);
+  assert.equal(await teacher.deleteBatch(batch.id), false);
 });

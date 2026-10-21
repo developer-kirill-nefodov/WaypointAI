@@ -1,0 +1,7 @@
+# Router fine-tuning (LoRA). CPU wheels by default; see README.md for GPU options.
+--extra-index-url https://download.pytorch.org/whl/cpu
+torch==2.5.1
+transformers==4.51.3
+peft==0.15.2
+accelerate==1.6.0
+safetensors==0.5.3

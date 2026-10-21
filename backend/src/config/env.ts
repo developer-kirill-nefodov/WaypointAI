@@ -5,6 +5,7 @@ import { modelEnvironmentSchema } from "./model.js";
 import { voiceEnvironmentSchema } from "./voice.js";
 import { eventsEnvironmentSchema } from "./events.js";
 import { osmEnvironmentSchema } from "./osm.js";
+import { teacherEnvironmentSchema } from "./teacher.js";
 
 // Load the repository-root .env regardless of the working directory; workspace scripts run from backend/.
 // Resolves to the root from both src/config/ and dist/config/.
@@ -21,6 +22,15 @@ const envSchema = z.object({
   // Never "true": that would trust any client-supplied X-Forwarded-For and defeat per-client rate limits.
   TRUST_PROXY: z.preprocess((value) => value === undefined || value === "" || value === "false" ? false : Number(value), z.union([z.literal(false), z.number().int().min(1).max(5)])),
   DEMO_MODE: z.preprocess((value) => value === undefined ? "true" : value, z.enum(["true", "false"]).transform((value) => value === "true")),
-}).merge(modelEnvironmentSchema).merge(voiceEnvironmentSchema).merge(eventsEnvironmentSchema).merge(osmEnvironmentSchema);
+  // Editing lessons and running the exam changes what every user's assistant is told; there is no authentication, so
+  // it is on by default only in development.
+  // The journal of chat turns: kept on this machine, deleted after JOURNAL_RETENTION_DAYS.
+  // A model that picks the first tool call from the short router prompt (for example a fine-tuned small model);
+  // unset uses the full prompt with OLLAMA_MODEL.
+  ROUTER_MODEL: z.preprocess((value) => value === "" ? undefined : value, z.string().min(1).max(120).optional()),
+  JOURNAL_ENABLED: z.preprocess((value) => value === undefined || value === "" ? "true" : value, z.enum(["true", "false"]).transform((value) => value === "true")),
+  JOURNAL_RETENTION_DAYS: z.coerce.number().int().min(1).max(365).default(30),
+  TRAINING_ENABLED: z.preprocess((value) => value === "" ? undefined : value, z.enum(["true", "false"]).transform((value) => value === "true").optional()),
+}).merge(modelEnvironmentSchema).merge(voiceEnvironmentSchema).merge(eventsEnvironmentSchema).merge(osmEnvironmentSchema).merge(teacherEnvironmentSchema);
 
 export const env = envSchema.parse(process.env);

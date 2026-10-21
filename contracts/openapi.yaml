@@ -703,8 +703,912 @@ paths:
             application/json:
               schema: { $ref: '#/components/schemas/InvestigationQueryError' }
         '429': { description: Too many requests; see Retry-After., content: { application/json: { schema: { $ref: '#/components/schemas/ErrorResponse' } } } }
+  /api/v1/training/status:
+    get:
+      operationId: getTrainingStatus
+      summary: Whether lessons and the exam can be edited, the model, and the running exam
+      responses:
+        '200':
+          description: Training status.
+          content:
+            application/json:
+              schema: { type: object, required: [editEnabled, model, routerModel, installedModels, activeRunId], properties: { editEnabled: { type: boolean }, model: { type: string }, routerModel: { type: [string, 'null'] }, installedModels: { type: array, items: { type: string } }, activeRunId: { type: [string, 'null'] } } }
+  /api/v1/training/model:
+    get:
+      operationId: getModelCard
+      summary: The configured model as the local runtime describes it, with our runtime settings
+      description: >-
+        Read by the server from Ollama /api/show and /api/version (the browser never reaches Ollama) and cached for
+        10 minutes. Only known metadata fields are returned; links are kept only on huggingface.co, github.com, and
+        qwenlm.github.io.
+      responses:
+        '200':
+          description: The model card.
+          content:
+            application/json:
+              schema: { type: object, required: [model], properties: { model: { $ref: '#/components/schemas/ModelCard' } } }
+        '503': { description: 'The runtime or the model is unavailable, model_unavailable.', content: { application/json: { schema: { $ref: '#/components/schemas/ErrorResponse' } } } }
+  /api/v1/training/lessons:
+    get:
+      operationId: listLessons
+      summary: All lessons (rules and approved examples)
+      responses:
+        '200':
+          description: Lessons, rules first.
+          content:
+            application/json:
+              schema: { type: object, required: [lessons], properties: { lessons: { type: array, items: { $ref: '#/components/schemas/Lesson' } } } }
+    post:
+      operationId: createLesson
+      summary: Create a lesson
+      description: >-
+        Text that tries to override instructions, contains SQL, URLs, or code fences is refused (forbidden_text).
+        An example needs a tool call, an answer, or both; its arguments are validated with that tool's own schema
+        (invalid_example_args), so an example cannot teach coordinates or other fields the tool refuses.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/LessonInput' }
+      responses:
+        '201':
+          description: The lesson.
+          content:
+            application/json:
+              schema: { type: object, required: [lesson], properties: { lesson: { $ref: '#/components/schemas/Lesson' } } }
+        '400': { description: 'invalid_lesson, forbidden_text, example_needs_tool_or_answer, or invalid_example_args, with the field.', content: { application/json: { schema: { $ref: '#/components/schemas/ErrorResponse' } } } }
+        '403': { description: 'Training is off (TRAINING_ENABLED; on by default only in development), training_disabled.', content: { application/json: { schema: { $ref: '#/components/schemas/ErrorResponse' } } } }
+  /api/v1/training/lessons/{id}:
+    patch:
+      operationId: updateLesson
+      summary: Replace a lesson (a new version) or switch it on or off
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string, format: uuid } }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              oneOf:
+                - $ref: '#/components/schemas/LessonInput'
+                - { type: object, required: [enabled], additionalProperties: false, properties: { enabled: { type: boolean } } }
+      responses:
+        '200':
+          description: The lesson.
+          content:
+            application/json:
+              schema: { type: object, required: [lesson], properties: { lesson: { $ref: '#/components/schemas/Lesson' } } }
+        '400': { description: 'Invalid ID or lesson.', content: { application/json: { schema: { $ref: '#/components/schemas/ErrorResponse' } } } }
+        '403': { description: 'Training is off (TRAINING_ENABLED; on by default only in development), training_disabled.', content: { application/json: { schema: { $ref: '#/components/schemas/ErrorResponse' } } } }
+        '404': { description: 'Lesson not found.', content: { application/json: { schema: { $ref: '#/components/schemas/ErrorResponse' } } } }
+    delete:
+      operationId: deleteLesson
+      summary: Delete a lesson
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string, format: uuid } }
+      responses:
+        '204': { description: Deleted. }
+        '403': { description: 'Training is off (TRAINING_ENABLED; on by default only in development), training_disabled.', content: { application/json: { schema: { $ref: '#/components/schemas/ErrorResponse' } } } }
+        '404': { description: 'Lesson not found.', content: { application/json: { schema: { $ref: '#/components/schemas/ErrorResponse' } } } }
+  /api/v1/training/lessons/preview:
+    post:
+      operationId: previewLessons
+      summary: Which lessons a message would get, and the text the model would see; nothing is sent to the model
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { type: object, required: [message], additionalProperties: false, properties: { message: { type: string, minLength: 1, maxLength: 500 } } }
+      responses:
+        '200':
+          description: Applied lessons and the prompt block (null when none apply).
+          content:
+            application/json:
+              schema: { type: object, required: [applied, prompt], properties: { applied: { type: array, items: { $ref: '#/components/schemas/AppliedLesson' } }, prompt: { type: [string, 'null'] } } }
+  /api/v1/training/cases:
+    get:
+      operationId: listExamCases
+      summary: Exam cases
+      responses:
+        '200':
+          description: Cases.
+          content:
+            application/json:
+              schema: { type: object, required: [cases], properties: { cases: { type: array, items: { $ref: '#/components/schemas/ExamCase' } } } }
+    post:
+      operationId: createExamCase
+      summary: Add an exam case
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/ExamCaseInput' }
+      responses:
+        '201':
+          description: The case.
+          content:
+            application/json:
+              schema: { type: object, required: [case], properties: { case: { $ref: '#/components/schemas/ExamCase' } } }
+        '400': { description: 'invalid_case.', content: { application/json: { schema: { $ref: '#/components/schemas/ErrorResponse' } } } }
+        '403': { description: 'Training is off (TRAINING_ENABLED; on by default only in development), training_disabled.', content: { application/json: { schema: { $ref: '#/components/schemas/ErrorResponse' } } } }
+  /api/v1/training/cases/generate:
+    post:
+      operationId: generateBenchmark
+      summary: Generate benchmark cases from the database and add the hand-written hard cases
+      description: >-
+        Replaces earlier generated cases with a new set built from templates in Russian, English, and German and real
+        settlements (cities for places and trips, Central Italian towns for events), so the right tool call of each case
+        is known. Hard cases (exonyms, typos, mixed languages, requests no tool serves) are added when missing. The same
+        seed and data give the same set.
+      requestBody:
+        content:
+          application/json:
+            schema: { type: object, additionalProperties: false, properties: { perSkill: { type: integer, minimum: 5, maximum: 60, default: 20 }, seed: { type: integer, minimum: 0, maximum: 1000000, default: 1 } } }
+      responses:
+        '200':
+          description: How many cases were generated and how many hard cases were added.
+          content:
+            application/json:
+              schema: { type: object, required: [generated, hard], properties: { generated: { type: integer }, hard: { type: integer } } }
+        '400': { description: 'invalid_request.', content: { application/json: { schema: { $ref: '#/components/schemas/ErrorResponse' } } } }
+        '403': { description: 'Training is off, training_disabled.', content: { application/json: { schema: { $ref: '#/components/schemas/ErrorResponse' } } } }
+        '409': { description: 'An exam is running, exam_running.', content: { application/json: { schema: { $ref: '#/components/schemas/ErrorResponse' } } } }
+  /api/v1/training/cases/starter:
+    post:
+      operationId: addStarterExamCases
+      summary: Add the built-in starter exam cases that are missing; edited ones are kept
+      responses:
+        '200':
+          description: How many were added.
+          content:
+            application/json:
+              schema: { type: object, required: [added], properties: { added: { type: integer, minimum: 0 } } }
+        '403': { description: 'Training is off (TRAINING_ENABLED; on by default only in development), training_disabled.', content: { application/json: { schema: { $ref: '#/components/schemas/ErrorResponse' } } } }
+  /api/v1/training/cases/{id}:
+    patch:
+      operationId: updateExamCase
+      summary: Replace a case or switch it on or off
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string, pattern: '^[a-z0-9-]{1,80}$' } }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              oneOf:
+                - $ref: '#/components/schemas/ExamCaseInput'
+                - { type: object, required: [enabled], additionalProperties: false, properties: { enabled: { type: boolean } } }
+      responses:
+        '200':
+          description: The case.
+          content:
+            application/json:
+              schema: { type: object, required: [case], properties: { case: { $ref: '#/components/schemas/ExamCase' } } }
+        '400': { description: 'Invalid ID or case.', content: { application/json: { schema: { $ref: '#/components/schemas/ErrorResponse' } } } }
+        '403': { description: 'Training is off (TRAINING_ENABLED; on by default only in development), training_disabled.', content: { application/json: { schema: { $ref: '#/components/schemas/ErrorResponse' } } } }
+        '404': { description: 'Case not found.', content: { application/json: { schema: { $ref: '#/components/schemas/ErrorResponse' } } } }
+    delete:
+      operationId: deleteExamCase
+      summary: Delete a case; past results keep the question as it was asked
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string, pattern: '^[a-z0-9-]{1,80}$' } }
+      responses:
+        '204': { description: Deleted. }
+        '403': { description: 'Training is off (TRAINING_ENABLED; on by default only in development), training_disabled.', content: { application/json: { schema: { $ref: '#/components/schemas/ErrorResponse' } } } }
+        '404': { description: 'Case not found.', content: { application/json: { schema: { $ref: '#/components/schemas/ErrorResponse' } } } }
+  /api/v1/training/runs:
+    get:
+      operationId: listExamRuns
+      summary: The last 50 exam runs, newest first
+      responses:
+        '200':
+          description: Runs and the running one.
+          content:
+            application/json:
+              schema: { type: object, required: [runs, activeRunId], properties: { runs: { type: array, items: { $ref: '#/components/schemas/EvalRun' } }, activeRunId: { type: [string, 'null'] } } }
+    post:
+      operationId: startExamRun
+      summary: Start an exam run in the background
+      description: >-
+        Asks every enabled case as a fresh chat turn (not stored in any conversation), with the enabled lessons or
+        without any (to compare). One run at a time; the chat and the exam share the local model, so a busy model is
+        waited for. Poll GET /runs/{id} for progress.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [withLessons]
+              additionalProperties: false
+              properties:
+                withLessons: { type: boolean }
+                label: { type: string, maxLength: 120 }
+                mode: { type: string, enum: [full, first_step, router], default: full, description: 'first_step stops at the model''s first tool call with the full prompt; router asks the router prompt (short, JSON answer); both check only the tool and its arguments.' }
+                model: { type: string, pattern: '^[\w.:/-]{1,120}$', description: 'Another installed model to measure (unknown_model otherwise). In router mode it defaults to ROUTER_MODEL, then the main model.' }
+                origins: { type: array, maxItems: 5, items: { type: string, enum: [starter, manual, generated, hard, journal] }, description: Which cases to ask; empty or missing asks every enabled case. }
+      responses:
+        '202':
+          description: The run, before any case is asked.
+          content:
+            application/json:
+              schema: { type: object, required: [run], properties: { run: { $ref: '#/components/schemas/EvalRun' } } }
+        '400': { description: 'invalid_run.', content: { application/json: { schema: { $ref: '#/components/schemas/ErrorResponse' } } } }
+        '403': { description: 'Training is off (TRAINING_ENABLED; on by default only in development), training_disabled.', content: { application/json: { schema: { $ref: '#/components/schemas/ErrorResponse' } } } }
+        '409': { description: 'exam_running, or no_cases when no case is enabled.', content: { application/json: { schema: { $ref: '#/components/schemas/ErrorResponse' } } } }
+  /api/v1/training/runs/{id}:
+    get:
+      operationId: getExamRun
+      summary: One run with the result of every case so far
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string, format: uuid } }
+      responses:
+        '200':
+          description: The run and its results.
+          content:
+            application/json:
+              schema: { type: object, required: [run, results], properties: { run: { $ref: '#/components/schemas/EvalRun' }, results: { type: array, items: { $ref: '#/components/schemas/EvalResult' } } } }
+        '400': { description: 'Invalid ID.', content: { application/json: { schema: { $ref: '#/components/schemas/ErrorResponse' } } } }
+        '404': { description: 'Run not found.', content: { application/json: { schema: { $ref: '#/components/schemas/ErrorResponse' } } } }
+  /api/v1/training/runs/{id}/cancel:
+    post:
+      operationId: cancelExamRun
+      summary: Cancel the running exam; finished cases are kept
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string, format: uuid } }
+      responses:
+        '202': { description: Cancelling. }
+        '403': { description: 'Training is off (TRAINING_ENABLED; on by default only in development), training_disabled.', content: { application/json: { schema: { $ref: '#/components/schemas/ErrorResponse' } } } }
+        '404': { description: 'not_running.', content: { application/json: { schema: { $ref: '#/components/schemas/ErrorResponse' } } } }
+  /api/v1/training/journal:
+    get:
+      operationId: listJournal
+      summary: Chat turns kept on this machine, with failure signals; candidates are unreviewed turns that went wrong
+      parameters:
+        - { name: filter, in: query, schema: { type: string, enum: [candidates, all, confirmed], default: candidates } }
+        - { name: limit, in: query, schema: { type: integer, minimum: 1, maximum: 100, default: 30 } }
+        - { name: offset, in: query, schema: { type: integer, minimum: 0, default: 0 } }
+      responses:
+        '200':
+          description: 'Entries and journal statistics.'
+          content:
+            application/json:
+              schema: { type: object, required: [total, entries, stats], properties: { total: { type: integer }, entries: { type: array, items: { $ref: '#/components/schemas/JournalEntry' } }, stats: { $ref: '#/components/schemas/JournalStats' } } }
+        '400': { description: 'invalid_query.', content: { application/json: { schema: { $ref: '#/components/schemas/ErrorResponse' } } } }
+  /api/v1/training/journal/{id}/review:
+    post:
+      operationId: reviewJournalEntry
+      summary: Confirm the right first call of a turn (it joins the benchmark and the training data) or dismiss it
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string, format: uuid } }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              oneOf:
+                - { type: object, required: [status, tool], additionalProperties: false, properties: { status: { const: confirmed }, tool: { type: string, enum: [search_places, search_events, list_sources, plan_trip, reply] }, args: { type: object }, addToBenchmark: { type: boolean, default: true } } }
+                - { type: object, required: [status], additionalProperties: false, properties: { status: { const: dismissed } } }
+      responses:
+        '200':
+          description: 'The reviewed entry.'
+          content:
+            application/json:
+              schema: { type: object, required: [entry], properties: { entry: { $ref: '#/components/schemas/JournalEntry' } } }
+        '400': { description: 'invalid_review, or invalid_example_args when the tool would refuse the arguments.', content: { application/json: { schema: { $ref: '#/components/schemas/ErrorResponse' } } } }
+        '403': { description: 'Training is off, training_disabled.', content: { application/json: { schema: { $ref: '#/components/schemas/ErrorResponse' } } } }
+        '404': { description: 'Entry not found.', content: { application/json: { schema: { $ref: '#/components/schemas/ErrorResponse' } } } }
+  /api/v1/training/journal/feedback:
+    post:
+      operationId: sendAnswerFeedback
+      summary: Thumbs up or down for a chat answer (by its requestId); a thumbs-down marks the turn for review
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { type: object, required: [requestId, rating], additionalProperties: false, properties: { requestId: { type: string, maxLength: 120 }, rating: { type: [integer, 'null'], enum: [1, -1, null] } } }
+      responses:
+        '204': { description: Saved. }
+        '400': { description: 'invalid_feedback.', content: { application/json: { schema: { $ref: '#/components/schemas/ErrorResponse' } } } }
+        '404': { description: 'The turn is not in the journal.', content: { application/json: { schema: { $ref: '#/components/schemas/ErrorResponse' } } } }
+  /api/v1/training/gaps:
+    get:
+      operationId: getDataGaps
+      summary: Settlements users asked for that are not imported, and place searches that found nothing
+      responses:
+        '200':
+          description: 'Gaps, most frequent first.'
+          content:
+            application/json:
+              schema: { type: object, required: [missingPlaces, emptySearches], properties: { missingPlaces: { type: array, items: { type: object, required: [name, count, lastAt], properties: { name: { type: string }, count: { type: integer }, lastAt: { type: string, format: date-time } } } }, emptySearches: { type: array, items: { type: object, required: [city, kind, count], properties: { city: { type: string }, kind: { type: [string, 'null'] }, count: { type: integer } } } } } }
+  /api/v1/training/aliases:
+    get:
+      operationId: listSettlementAliases
+      summary: Settlement aliases the server resolves without the model (Норча → Norcia)
+      responses:
+        '200':
+          description: 'Aliases.'
+          content:
+            application/json:
+              schema: { type: object, required: [aliases], properties: { aliases: { type: array, items: { type: object, required: [alias, placeId, name, countryCode, origin, createdAt], properties: { alias: { type: string }, placeId: { type: string }, name: { type: string }, countryCode: { type: [string, 'null'] }, origin: { type: string }, createdAt: { type: string, format: date-time } } } } } }
+    post:
+      operationId: addSettlementAlias
+      summary: Add an alias for a settlement named exactly (local or English name)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { type: object, required: [alias, settlement], additionalProperties: false, properties: { alias: { type: string, minLength: 2, maxLength: 120 }, settlement: { type: string, maxLength: 120 } } }
+      responses:
+        '201':
+          description: 'The alias and its settlement.'
+          content:
+            application/json:
+              schema: { type: object, required: [alias, settlement], properties: { alias: { type: string }, settlement: { type: object, required: [id, name], properties: { id: { type: string }, name: { type: string } } } } }
+        '400': { description: 'invalid_alias.', content: { application/json: { schema: { $ref: '#/components/schemas/ErrorResponse' } } } }
+        '403': { description: 'Training is off, training_disabled.', content: { application/json: { schema: { $ref: '#/components/schemas/ErrorResponse' } } } }
+        '404': { description: 'settlement_not_found.', content: { application/json: { schema: { $ref: '#/components/schemas/ErrorResponse' } } } }
+        '409': { description: 'alias_is_a_settlement: the alias already names another settlement.', content: { application/json: { schema: { $ref: '#/components/schemas/ErrorResponse' } } } }
+  /api/v1/training/aliases/{alias}:
+    delete:
+      operationId: deleteSettlementAlias
+      summary: Remove an alias
+      parameters:
+        - { name: alias, in: path, required: true, schema: { type: string, minLength: 2, maxLength: 120 } }
+      responses:
+        '204': { description: Removed. }
+        '403': { description: 'Training is off, training_disabled.', content: { application/json: { schema: { $ref: '#/components/schemas/ErrorResponse' } } } }
+        '404': { description: 'Alias not found.', content: { application/json: { schema: { $ref: '#/components/schemas/ErrorResponse' } } } }
+  /api/v1/training/finetune:
+    get:
+      operationId: getFinetuneState
+      summary: Router fine-tuning state, the dataset summary, and LoRA runs
+      responses:
+        '200':
+          description: 'State.'
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/FinetuneState' }
+  /api/v1/training/finetune/dataset:
+    post:
+      operationId: buildRouterDataset
+      summary: Build the router training dataset (synthetic questions with another seed than the benchmark, accepted teacher batches, and confirmed journal turns; benchmark questions are left out)
+      requestBody:
+        content:
+          application/json:
+            schema: { type: object, additionalProperties: false, properties: { perSkill: { type: integer, minimum: 20, maximum: 500, default: 150 }, seed: { type: integer, minimum: 0, maximum: 1000000, default: 1000 } } }
+      responses:
+        '200':
+          description: 'The dataset summary.'
+          content:
+            application/json:
+              schema: { type: object, required: [dataset], properties: { dataset: { $ref: '#/components/schemas/DatasetSummary' } } }
+        '403': { description: 'Training is off, training_disabled.', content: { application/json: { schema: { $ref: '#/components/schemas/ErrorResponse' } } } }
+        '409': { description: 'training_running.', content: { application/json: { schema: { $ref: '#/components/schemas/ErrorResponse' } } } }
+  /api/v1/training/finetune/runs:
+    post:
+      operationId: startLoraRun
+      summary: Start LoRA fine-tuning of a small base model in a local Python process (model/training/train_router.py)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { type: object, required: [baseModel], additionalProperties: false, properties: { baseModel: { type: string, enum: [Qwen/Qwen3-0.6B, Qwen/Qwen3-1.7B] }, epochs: { type: number, minimum: 0.5, maximum: 5, default: 2 }, learningRate: { type: number, minimum: 0.00001, maximum: 0.001, default: 0.0002 }, rank: { type: integer, enum: [8, 16, 32], default: 16 }, autoBenchmark: { type: boolean, default: false, description: 'Publish to Ollama and start the router benchmark once training succeeds.' } } }
+      responses:
+        '202':
+          description: 'The run.'
+          content:
+            application/json:
+              schema: { type: object, required: [run], properties: { run: { $ref: '#/components/schemas/LoraRun' } } }
+        '400': { description: 'invalid_run.', content: { application/json: { schema: { $ref: '#/components/schemas/ErrorResponse' } } } }
+        '403': { description: 'Training is off, training_disabled.', content: { application/json: { schema: { $ref: '#/components/schemas/ErrorResponse' } } } }
+        '409': { description: 'training_running, python_missing, or dataset_missing.', content: { application/json: { schema: { $ref: '#/components/schemas/ErrorResponse' } } } }
+  /api/v1/training/finetune/runs/{id}/cancel:
+    post:
+      operationId: cancelLoraRun
+      summary: Stop a running LoRA run
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string, pattern: '^\d{8}-[0-9a-f]{6}$' } }
+      responses:
+        '202': { description: Stopping. }
+        '403': { description: 'Training is off, training_disabled.', content: { application/json: { schema: { $ref: '#/components/schemas/ErrorResponse' } } } }
+        '404': { description: 'not_running.', content: { application/json: { schema: { $ref: '#/components/schemas/ErrorResponse' } } } }
+  /api/v1/training/finetune/runs/{id}/publish:
+    post:
+      operationId: publishLoraRun
+      summary: Register a finished run in Ollama as waypoint-router:<id>, in the background (merge an imported adapter, convert to GGUF Q8_0, ollama create); the run shows the stage in publishing and the result in publishedAs or publishError
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string, pattern: '^\d{8}-[0-9a-f]{6}$' } }
+      responses:
+        '202':
+          description: 'The run, with publishing set.'
+          content:
+            application/json:
+              schema: { type: object, required: [run], properties: { run: { $ref: '#/components/schemas/LoraRun' } } }
+        '403': { description: 'Training is off, training_disabled.', content: { application/json: { schema: { $ref: '#/components/schemas/ErrorResponse' } } } }
+        '409': { description: 'run_not_finished, publish_running, converter_missing, or python_missing.', content: { application/json: { schema: { $ref: '#/components/schemas/ErrorResponse' } } } }
+  /api/v1/training/finetune/runs/{id}/export:
+    get:
+      operationId: exportLoraRun
+      summary: Download a finished run as a package (tar with manifest.json, SHA-256 per file, the LoRA adapter, and for kind gguf the model ready for Ollama)
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string, pattern: '^\d{8}-[0-9a-f]{6}$' } }
+        - { name: kind, in: query, required: true, schema: { type: string, enum: [adapter, gguf] } }
+      responses:
+        '200':
+          description: 'The package.'
+          content:
+            application/x-tar:
+              schema: { type: string, format: binary }
+        '400': { description: 'invalid_request.', content: { application/json: { schema: { $ref: '#/components/schemas/ErrorResponse' } } } }
+        '403': { description: 'Training is off, training_disabled.', content: { application/json: { schema: { $ref: '#/components/schemas/ErrorResponse' } } } }
+        '409': { description: 'run_not_finished or export_unavailable (no GGUF until the run is published).', content: { application/json: { schema: { $ref: '#/components/schemas/ErrorResponse' } } } }
+  /api/v1/training/finetune/import:
+    post:
+      operationId: importLoraPackage
+      summary: Import a package as a new run. Only regular files under fixed names are accepted; sizes, checksums, the base model, and the weight headers (safetensors, GGUF) are checked before anything is kept
+      requestBody:
+        required: true
+        content:
+          application/x-tar:
+            schema: { type: string, format: binary }
+      responses:
+        '201':
+          description: 'The new run.'
+          content:
+            application/json:
+              schema: { type: object, required: [run], properties: { run: { $ref: '#/components/schemas/LoraRun' } } }
+        '403': { description: 'Training is off, training_disabled.', content: { application/json: { schema: { $ref: '#/components/schemas/ErrorResponse' } } } }
+        '409': { description: 'import_running.', content: { application/json: { schema: { $ref: '#/components/schemas/ErrorResponse' } } } }
+        '413': { description: 'too_large (over 7 GB).', content: { application/json: { schema: { $ref: '#/components/schemas/ErrorResponse' } } } }
+        '415': { description: 'unsupported_media_type.', content: { application/json: { schema: { $ref: '#/components/schemas/ErrorResponse' } } } }
+        '422': { description: 'not_a_package, unexpected_entry, checksum_mismatch, unsupported_base_model, invalid_weights, or missing_file.', content: { application/json: { schema: { $ref: '#/components/schemas/ErrorResponse' } } } }
+  /api/v1/training/teacher:
+    get:
+      operationId: getTeacherState
+      summary: The teacher (an OpenAI model writing router training examples), its topics, today's usage, the running batch, and the batches
+      responses:
+        '200':
+          description: 'State.'
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/TeacherState' }
+  /api/v1/training/teacher/batches:
+    post:
+      operationId: startTeacherBatch
+      summary: Start a batch in the background; only synthetic instructions and settlement names are sent to OpenAI
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { type: object, required: [topic, languages, count], additionalProperties: false, properties: { topic: { type: string, enum: [exonyms, places, events, trips, chat, mixed] }, languages: { type: array, minItems: 1, maxItems: 3, uniqueItems: true, items: { type: string, enum: [ru, en, de] } }, count: { type: integer, minimum: 5, maximum: 200 }, crossCheck: { type: boolean, default: false, description: 'The teacher answers every passed question again blind; a different call marks the example disputed.' } } }
+      responses:
+        '202':
+          description: 'The batch.'
+          content:
+            application/json:
+              schema: { type: object, required: [batch], properties: { batch: { $ref: '#/components/schemas/TeacherBatch' } } }
+        '400': { description: 'invalid_batch.', content: { application/json: { schema: { $ref: '#/components/schemas/ErrorResponse' } } } }
+        '403': { description: 'Training is off, training_disabled.', content: { application/json: { schema: { $ref: '#/components/schemas/ErrorResponse' } } } }
+        '409': { description: 'teacher_running or teacher_unavailable (no OPENAI_API_KEY).', content: { application/json: { schema: { $ref: '#/components/schemas/ErrorResponse' } } } }
+        '429': { description: 'daily_limit, with remaining.', content: { application/json: { schema: { $ref: '#/components/schemas/ErrorResponse' } } } }
+  /api/v1/training/teacher/batches/{id}:
+    get:
+      operationId: getTeacherBatch
+      summary: A batch and its examples with the results of the checks
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string, format: uuid } }
+      responses:
+        '200':
+          description: 'The batch.'
+          content:
+            application/json:
+              schema: { type: object, required: [batch, examples], properties: { batch: { $ref: '#/components/schemas/TeacherBatch' }, examples: { type: array, items: { $ref: '#/components/schemas/TeacherExample' } } } }
+        '404': { description: 'not_found.', content: { application/json: { schema: { $ref: '#/components/schemas/ErrorResponse' } } } }
+    delete:
+      operationId: deleteTeacherBatch
+      summary: Delete a batch's examples; the batch stays hidden and still counts toward the daily limit
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string, format: uuid } }
+      responses:
+        '204': { description: Deleted. }
+        '403': { description: 'Training is off, training_disabled.', content: { application/json: { schema: { $ref: '#/components/schemas/ErrorResponse' } } } }
+        '409': { description: 'batch_busy (generating or already deleted).', content: { application/json: { schema: { $ref: '#/components/schemas/ErrorResponse' } } } }
+  /api/v1/training/teacher/batches/{id}/cancel:
+    post:
+      operationId: cancelTeacherBatch
+      summary: Stop a generating batch; what was written stays reviewable
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string, format: uuid } }
+      responses:
+        '202': { description: Stopping. }
+        '403': { description: 'Training is off, training_disabled.', content: { application/json: { schema: { $ref: '#/components/schemas/ErrorResponse' } } } }
+        '404': { description: 'not_running.', content: { application/json: { schema: { $ref: '#/components/schemas/ErrorResponse' } } } }
+  /api/v1/training/teacher/batches/{id}/regenerate:
+    post:
+      operationId: regenerateTeacherBatch
+      summary: Replace the rejected examples with new ones, up to the requested size
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string, format: uuid } }
+      responses:
+        '202':
+          description: 'The batch.'
+          content:
+            application/json:
+              schema: { type: object, required: [batch], properties: { batch: { $ref: '#/components/schemas/TeacherBatch' } } }
+        '403': { description: 'Training is off, training_disabled.', content: { application/json: { schema: { $ref: '#/components/schemas/ErrorResponse' } } } }
+        '404': { description: 'not_found.', content: { application/json: { schema: { $ref: '#/components/schemas/ErrorResponse' } } } }
+        '409': { description: 'batch_busy, nothing_to_regenerate, or teacher_running.', content: { application/json: { schema: { $ref: '#/components/schemas/ErrorResponse' } } } }
+        '429': { description: 'daily_limit.', content: { application/json: { schema: { $ref: '#/components/schemas/ErrorResponse' } } } }
+  /api/v1/training/teacher/batches/{id}/accept:
+    post:
+      operationId: acceptTeacherBatch
+      summary: Accept a reviewed batch into the dataset (on its next build), or take it out again
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string, format: uuid } }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { type: object, required: [accepted], additionalProperties: false, properties: { accepted: { type: boolean } } }
+      responses:
+        '200':
+          description: 'The batch.'
+          content:
+            application/json:
+              schema: { type: object, required: [batch], properties: { batch: { $ref: '#/components/schemas/TeacherBatch' } } }
+        '403': { description: 'Training is off, training_disabled.', content: { application/json: { schema: { $ref: '#/components/schemas/ErrorResponse' } } } }
+        '404': { description: 'not_found.', content: { application/json: { schema: { $ref: '#/components/schemas/ErrorResponse' } } } }
+        '409': { description: 'batch_busy.', content: { application/json: { schema: { $ref: '#/components/schemas/ErrorResponse' } } } }
+  /api/v1/training/teacher/examples/{id}:
+    patch:
+      operationId: editTeacherExample
+      summary: Edit an example (the checks run again; a passing edit counts as approved by a person) or approve a disputed one as it is
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string, format: uuid } }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { type: object, additionalProperties: false, properties: { question: { type: string, minLength: 3, maxLength: 400 }, language: { type: string, enum: [ru, en, de] }, tool: { type: string, enum: [search_places, search_events, plan_trip, list_sources, reply] }, args: { type: object }, approve: { type: boolean } } }
+      responses:
+        '200':
+          description: 'The example.'
+          content:
+            application/json:
+              schema: { type: object, required: [example], properties: { example: { $ref: '#/components/schemas/TeacherExample' } } }
+        '400': { description: 'invalid_example.', content: { application/json: { schema: { $ref: '#/components/schemas/ErrorResponse' } } } }
+        '403': { description: 'Training is off, training_disabled.', content: { application/json: { schema: { $ref: '#/components/schemas/ErrorResponse' } } } }
+        '404': { description: 'not_found.', content: { application/json: { schema: { $ref: '#/components/schemas/ErrorResponse' } } } }
+        '409': { description: 'batch_busy or not_disputed.', content: { application/json: { schema: { $ref: '#/components/schemas/ErrorResponse' } } } }
+    delete:
+      operationId: deleteTeacherExample
+      summary: Delete an example
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string, format: uuid } }
+      responses:
+        '204': { description: Deleted. }
+        '403': { description: 'Training is off, training_disabled.', content: { application/json: { schema: { $ref: '#/components/schemas/ErrorResponse' } } } }
+        '404': { description: 'not_found.', content: { application/json: { schema: { $ref: '#/components/schemas/ErrorResponse' } } } }
 components:
   schemas:
+    JournalEntry:
+      type: object
+      required: [id, requestId, conversationId, language, message, model, toolCalls, firstTool, outcome, errorCode, signals, feedback, durationMs, reviewStatus, corrected, createdAt]
+      properties:
+        id: { type: string, format: uuid }
+        requestId: { type: string }
+        conversationId: { type: string }
+        language: { type: [string, 'null'] }
+        message: { type: string }
+        model: { type: string }
+        toolCalls: { type: array, items: { type: object, required: [tool, args], properties: { tool: { type: string }, args: {}, error: { type: [string, 'null'] }, resultCount: { type: [integer, 'null'] } } } }
+        firstTool: { type: [string, 'null'] }
+        outcome: { type: string, enum: [completed, clarification, error, cancelled] }
+        errorCode: { type: [string, 'null'] }
+        signals: { type: object, properties: { emptyResult: { type: boolean }, placeNotFound: { type: [string, 'null'] }, invalidArgs: { type: boolean }, retriedWithoutTool: { type: boolean }, rephrased: { type: boolean } } }
+        feedback: { type: [integer, 'null'], enum: [1, -1, null] }
+        durationMs: { type: integer }
+        reviewStatus: { type: string, enum: [new, confirmed, dismissed] }
+        corrected: { type: [object, 'null'], properties: { tool: { type: string }, args: { type: object } } }
+        createdAt: { type: string, format: date-time }
+    JournalStats:
+      type: object
+      required: [total, candidates, confirmed, thumbsUp, thumbsDown, failureShareWeek]
+      properties:
+        total: { type: integer }
+        candidates: { type: integer }
+        confirmed: { type: integer }
+        thumbsUp: { type: integer }
+        thumbsDown: { type: integer }
+        failureShareWeek: { type: [number, 'null'] }
+    DatasetSummary:
+      type: object
+      required: [total, bySkill, byLanguage, bySource, excludedAsBenchmark, createdAt, path]
+      properties:
+        total: { type: integer }
+        bySkill: { type: object, additionalProperties: { type: integer } }
+        byLanguage: { type: object, additionalProperties: { type: integer } }
+        bySource: { type: object, additionalProperties: { type: integer } }
+        byTopic: { type: object, additionalProperties: { type: integer }, description: Teacher examples per topic. }
+        excludedAsBenchmark: { type: integer }
+        createdAt: { type: string, format: date-time }
+        path: { type: string }
+    LoraRun:
+      type: object
+      required: [id, status, phase, baseModel, epochs, learningRate, rank, examples, device, step, totalSteps, epoch, etaSeconds, peakMemoryMb, losses, timeline, error, startedAt, finishedAt, autoBenchmark, publishedAs, publishing, publishError, benchmarkRunId, benchmarkError, imported, exports]
+      properties:
+        id: { type: string }
+        status: { type: string, enum: [running, succeeded, failed, cancelled] }
+        phase: { type: string }
+        baseModel: { type: string }
+        epochs: { type: number }
+        learningRate: { type: number }
+        rank: { type: integer }
+        examples: { type: [integer, 'null'] }
+        device: { type: [string, 'null'] }
+        step: { type: integer }
+        totalSteps: { type: [integer, 'null'] }
+        epoch: { type: [number, 'null'], description: 'Epochs done so far, fractional.' }
+        etaSeconds: { type: [number, 'null'] }
+        peakMemoryMb: { type: [integer, 'null'] }
+        timeline: { type: array, description: 'When each stage began: starting, loading, tokenized, training, saving, done, merging, converting, creating, published, benchmark, or imported.', items: { type: object, required: [phase, at], properties: { phase: { type: string }, at: { type: string, format: date-time } } } }
+        losses: { type: array, items: { type: object, required: [step, loss, validationLoss], properties: { step: { type: integer }, loss: { type: [number, 'null'] }, validationLoss: { type: [number, 'null'] } } } }
+        error: { type: [string, 'null'] }
+        startedAt: { type: string, format: date-time }
+        finishedAt: { type: [string, 'null'], format: date-time }
+        autoBenchmark: { type: boolean }
+        publishedAs: { type: [string, 'null'] }
+        publishing: { type: [string, 'null'], enum: [merging, converting, creating, null] }
+        publishError: { type: [string, 'null'] }
+        benchmarkRunId: { type: [string, 'null'] }
+        benchmarkError: { type: [string, 'null'] }
+        imported: { type: [object, 'null'], required: [fromRunId, kind, at], properties: { fromRunId: { type: string }, kind: { type: string, enum: [adapter, gguf] }, at: { type: string, format: date-time } } }
+        exports: { type: object, required: [adapter, gguf], properties: { adapter: { type: boolean }, gguf: { type: boolean } } }
+    TeacherState:
+      type: object
+      required: [available, model, topics, languages, usage, progress, batches]
+      properties:
+        available: { type: boolean, description: OPENAI_API_KEY is set. }
+        model: { type: string }
+        topics: { type: array, items: { type: object, required: [id, title, description, tools], properties: { id: { type: string }, title: { type: object, additionalProperties: { type: string } }, description: { type: object, additionalProperties: { type: string } }, tools: { type: array, items: { type: string } } } } }
+        languages: { type: array, items: { type: string, enum: [ru, en, de] } }
+        usage: { type: object, required: [generatedToday, dailyLimit], properties: { generatedToday: { type: integer }, dailyLimit: { type: integer } } }
+        progress: { type: [object, 'null'], required: [batchId, done, total], properties: { batchId: { type: string, format: uuid }, done: { type: integer }, total: { type: integer } } }
+        batches: { type: array, items: { $ref: '#/components/schemas/TeacherBatch' } }
+    TeacherBatch:
+      type: object
+      required: [id, topic, languages, requested, model, crossCheck, status, errorCode, promptTokens, completionTokens, counts, createdAt, finishedAt]
+      properties:
+        id: { type: string, format: uuid }
+        topic: { type: string }
+        languages: { type: array, items: { type: string, enum: [ru, en, de] } }
+        requested: { type: integer }
+        model: { type: string }
+        crossCheck: { type: boolean }
+        status: { type: string, enum: [generating, review, accepted, failed, cancelled] }
+        errorCode: { type: [string, 'null'] }
+        promptTokens: { type: integer }
+        completionTokens: { type: integer }
+        counts: { type: object, required: [passed, disputed, rejected, edited], properties: { passed: { type: integer }, disputed: { type: integer }, rejected: { type: integer }, edited: { type: integer } } }
+        createdAt: { type: string, format: date-time }
+        finishedAt: { type: [string, 'null'], format: date-time }
+    TeacherExample:
+      type: object
+      required: [id, batchId, question, language, tool, args, status, reasons]
+      properties:
+        id: { type: string, format: uuid }
+        batchId: { type: string, format: uuid }
+        question: { type: string }
+        language: { type: string, enum: [ru, en, de] }
+        tool: { type: string }
+        args: { type: object }
+        status: { type: string, enum: [passed, disputed, rejected, edited] }
+        reasons: { type: array, items: { type: object, required: [code], properties: { code: { type: string, enum: [invalid_call, question_length, language_mismatch, off_topic, not_earthquakes, city_unknown, duplicate, benchmark_leak, city_corrected, cross_check_mismatch] }, detail: { type: string } } } }
+    FinetuneState:
+      type: object
+      required: [availability, baseModels, dataset, runs, activeRunId]
+      properties:
+        availability: { type: object, required: [python, dataset, converter], properties: { python: { type: boolean }, dataset: { type: boolean }, converter: { type: boolean, description: llama.cpp's GGUF converter, needed to publish. } } }
+        baseModels: { type: array, items: { type: string } }
+        dataset:
+          oneOf:
+            - $ref: '#/components/schemas/DatasetSummary'
+            - type: 'null'
+        runs: { type: array, items: { $ref: '#/components/schemas/LoraRun' } }
+        activeRunId: { type: [string, 'null'] }
+    ModelCard:
+      type: object
+      required: [name, family, version, finetune, parameterCount, parameterSize, format, quantization, architecture, contextLength, license, licenseUrl, modelUrl, capabilities, installedAt, runtimeVersion, settings]
+      properties:
+        name: { type: string }
+        family: { type: [string, 'null'] }
+        version: { type: [string, 'null'] }
+        finetune: { type: [string, 'null'], description: 'The developer''s fine-tune of the base model, for example Instruct.' }
+        parameterCount: { type: [number, 'null'] }
+        parameterSize: { type: [string, 'null'] }
+        format: { type: [string, 'null'] }
+        quantization: { type: [string, 'null'] }
+        architecture:
+          type: object
+          required: [layers, attentionHeads, keyValueHeads, embeddingLength, feedForwardLength]
+          properties:
+            layers: { type: [number, 'null'] }
+            attentionHeads: { type: [number, 'null'] }
+            keyValueHeads: { type: [number, 'null'] }
+            embeddingLength: { type: [number, 'null'] }
+            feedForwardLength: { type: [number, 'null'] }
+        contextLength: { type: [number, 'null'], description: The model's maximum context; settings.contextLength is what the app uses. }
+        license: { type: [string, 'null'] }
+        licenseUrl: { type: [string, 'null'], format: uri }
+        modelUrl: { type: [string, 'null'], format: uri }
+        capabilities: { type: array, items: { type: string } }
+        installedAt: { type: [string, 'null'], format: date-time }
+        runtimeVersion: { type: [string, 'null'] }
+        settings:
+          type: object
+          required: [contextLength, maxAnswerTokens, temperature, keepAlive]
+          properties:
+            contextLength: { type: integer }
+            maxAnswerTokens: { type: integer }
+            temperature: { type: number }
+            keepAlive: { type: string }
+    LessonInput:
+      oneOf:
+        - type: object
+          required: [kind, topic, title, text]
+          additionalProperties: false
+          properties:
+            kind: { const: rule }
+            topic: { $ref: '#/components/schemas/LessonTopic' }
+            title: { type: string, minLength: 1, maxLength: 120 }
+            text: { type: string, minLength: 1, maxLength: 300 }
+            enabled: { type: boolean }
+        - type: object
+          required: [kind, topic, title, text]
+          additionalProperties: false
+          properties:
+            kind: { const: example }
+            topic: { $ref: '#/components/schemas/LessonTopic' }
+            title: { type: string, minLength: 1, maxLength: 120 }
+            text: { type: string, minLength: 1, maxLength: 300, description: The user's question. }
+            exampleTool: { type: [string, 'null'], enum: [search_places, search_events, list_sources, plan_trip, reply, null] }
+            exampleArgs: { type: [object, 'null'], additionalProperties: true }
+            exampleAnswer: { type: [string, 'null'], maxLength: 600 }
+            enabled: { type: boolean }
+    LessonTopic: { type: string, enum: [all, places, events, trips, sources] }
+    Lesson:
+      type: object
+      required: [id, kind, topic, title, text, exampleTool, exampleArgs, exampleAnswer, enabled, version, appliedCount, lastAppliedAt, createdAt, updatedAt]
+      properties:
+        id: { type: string, format: uuid }
+        kind: { type: string, enum: [rule, example] }
+        topic: { $ref: '#/components/schemas/LessonTopic' }
+        title: { type: string }
+        text: { type: string }
+        exampleTool: { type: [string, 'null'], enum: [search_places, search_events, list_sources, plan_trip, reply, null] }
+        exampleArgs: { type: [object, 'null'], additionalProperties: true }
+        exampleAnswer: { type: [string, 'null'] }
+        enabled: { type: boolean }
+        version: { type: integer, minimum: 1 }
+        appliedCount: { type: integer, minimum: 0, description: How many chat turns this lesson reached. }
+        lastAppliedAt: { type: [string, 'null'], format: date-time }
+        createdAt: { type: string, format: date-time }
+        updatedAt: { type: string, format: date-time }
+    AppliedLesson:
+      type: object
+      required: [id, kind, title, score]
+      properties:
+        id: { type: string }
+        kind: { type: string, enum: [rule, example] }
+        title: { type: string }
+        score: { type: number, minimum: 0, maximum: 1, description: Similarity of an example to the message; 1 for rules. }
+    CaseExpectation:
+      type: object
+      additionalProperties: false
+      description: Each field present becomes one check; the answer's language is always checked.
+      properties:
+        tool: { type: string, enum: [search_places, search_events, list_sources, plan_trip, reply, search_records, get_record_details, edit_trip_plan] }
+        args:
+          type: object
+          maxProperties: 8
+          propertyNames: { pattern: '^[A-Za-z][\w.]{0,39}$' }
+          additionalProperties:
+            oneOf:
+              - { type: [string, number, boolean] }
+              - { type: array, minItems: 1, maxItems: 5, items: { type: string } }
+          description: 'Arguments the call must contain. Strings compare case-insensitively; a list accepts any of its values (a city by its local or English name); a dotted key reaches into nested values (cities.0.name).'
+        mustInclude: { type: array, maxItems: 5, items: { type: string, maxLength: 80 } }
+        mustNotInclude: { type: array, maxItems: 5, items: { type: string, maxLength: 80 } }
+        citations: { type: boolean, description: 'The answer must cite rows ([E1], [P1]).' }
+        citeEachEvent: { type: boolean, description: 'Every sentence that states a magnitude must cite its event ([E1]); a summary of a magnitude range does not count.' }
+        maxSentences: { type: integer, minimum: 1, maximum: 20 }
+    ExamCaseInput:
+      type: object
+      required: [question, language, expect]
+      additionalProperties: false
+      properties:
+        question: { type: string, minLength: 1, maxLength: 300 }
+        language: { type: string, enum: [ru, en, de] }
+        expect: { $ref: '#/components/schemas/CaseExpectation' }
+        enabled: { type: boolean }
+    ExamCase:
+      type: object
+      required: [id, question, language, expect, enabled, skill, origin]
+      properties:
+        id: { type: string }
+        question: { type: string }
+        language: { type: string, enum: [ru, en, de] }
+        expect: { $ref: '#/components/schemas/CaseExpectation' }
+        enabled: { type: boolean }
+        skill: { type: string, enum: [places, events, trips, sources, reply, other] }
+        origin: { type: string, enum: [starter, manual, generated, hard, journal] }
+    EvalRun:
+      type: object
+      required: [id, status, mode, caseOrigins, metrics, withLessons, lessonIds, model, label, caseCount, casesDone, casesPassed, checksTotal, checksPassed, score, errorCode, startedAt, finishedAt]
+      properties:
+        id: { type: string, format: uuid }
+        status: { type: string, enum: [running, succeeded, failed, cancelled] }
+        mode: { type: string, enum: [full, first_step, router] }
+        caseOrigins: { type: array, items: { type: string } }
+        metrics:
+          oneOf:
+            - $ref: '#/components/schemas/RunMetrics'
+            - type: 'null'
+        withLessons: { type: boolean }
+        lessonIds: { type: array, items: { type: string }, description: Lessons enabled when the run started. }
+        model: { type: string }
+        label: { type: [string, 'null'] }
+        caseCount: { type: integer }
+        casesDone: { type: integer }
+        casesPassed: { type: integer }
+        checksTotal: { type: integer }
+        checksPassed: { type: integer }
+        score: { type: [number, 'null'], minimum: 0, maximum: 1, description: Share of passed checks. }
+        errorCode: { type: [string, 'null'] }
+        startedAt: { type: string, format: date-time }
+        finishedAt: { type: [string, 'null'], format: date-time }
+    Share:
+      type: object
+      required: [passed, total, low, high]
+      description: A share of passed cases with its 95% Wilson interval.
+      properties:
+        passed: { type: integer }
+        total: { type: integer }
+        low: { type: number }
+        high: { type: number }
+    RunMetrics:
+      type: object
+      required: [overall, bySkill, byLanguage, tool, args]
+      properties:
+        overall: { $ref: '#/components/schemas/Share' }
+        bySkill: { type: object, additionalProperties: { $ref: '#/components/schemas/Share' } }
+        byLanguage: { type: object, additionalProperties: { $ref: '#/components/schemas/Share' } }
+        tool: { $ref: '#/components/schemas/Share' }
+        args: { $ref: '#/components/schemas/Share' }
+    EvalCheck:
+      type: object
+      required: [check, passed]
+      properties:
+        check: { type: string, enum: [completed, tool, args, language, mustInclude, mustNotInclude, citations, citeEachEvent, maxSentences] }
+        passed: { type: boolean }
+        expected: {}
+        actual: {}
+    EvalResult:
+      type: object
+      required: [caseId, question, skill, language, passed, checks, toolCalls, answer, appliedLessons, durationMs, errorCode]
+      properties:
+        caseId: { type: string }
+        question: { type: string }
+        skill: { type: string }
+        language: { type: [string, 'null'] }
+        passed: { type: boolean }
+        checks: { type: array, items: { $ref: '#/components/schemas/EvalCheck' } }
+        toolCalls: { type: array, items: { type: object, required: [tool, args], properties: { tool: { type: string }, args: {} } } }
+        answer: { type: string }
+        appliedLessons: { type: array, items: { $ref: '#/components/schemas/AppliedLesson' } }
+        durationMs: { type: integer, minimum: 0 }
+        errorCode: { type: [string, 'null'] }
     HealthResponse:
       type: object
       required: [status, apiVersion]

@@ -38,17 +38,35 @@ const LONG_NAME_MAX_EDITS = 2;
 
 /**
  * Resolves a settlement name to one verified OSM row: exact (case-insensitive) local or English name,
- * larger settlement types first. If nothing matches exactly, a close spelling with the same first three
- * letters is accepted and reported as "approximate". Returns null instead of guessing further.
+ * larger settlement types first, then a reviewed alias ("Норча" → Norcia). If nothing matches exactly, a close
+ * spelling with the same first three letters is accepted and reported as "approximate". Returns null instead of
+ * guessing further.
  */
 export async function resolveSettlement(name: string): Promise<ResolvedPlace | null> {
-  await database.authenticate();
+  const exact = await resolveSettlementExactly(name);
+  if (exact) return exact;
   const term = name.trim().slice(0, 100);
-  const exact = await findSettlement(term);
-  if (exact) return { match: "exact", ...exact };
   if (term.length < MIN_APPROXIMATE_NAME_LENGTH) return null;
   const approximate = await findSettlementApproximately(term);
   return approximate ? { match: "approximate", ...approximate } : null;
+}
+
+/** An exact name or a reviewed alias; never a fuzzy match. */
+export async function resolveSettlementExactly(name: string): Promise<ResolvedPlace | null> {
+  await database.authenticate();
+  const term = name.trim().slice(0, 100);
+  const exact = await findSettlement(term) ?? await findAlias(term);
+  return exact ? { match: "exact", ...exact } : null;
+}
+
+async function findAlias(name: string): Promise<Omit<ResolvedPlace, "match"> | null> {
+  const [rows] = await database.query(
+    `SELECT p.id, p.source_id, p.name, p.category, p.country_code, p.lat, p.lon
+     FROM settlement_aliases a JOIN places p ON p.id = a.place_id
+     WHERE a.alias = lower($1) LIMIT 1`,
+    { bind: [name] },
+  ).catch(() => [[]]);
+  return toResolvedPlace((rows as SettlementRow[])[0]);
 }
 
 async function findSettlement(name: string): Promise<Omit<ResolvedPlace, "match"> | null> {

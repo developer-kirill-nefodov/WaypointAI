@@ -17,3 +17,7 @@ data/local/
 
 # IDE project files
 .idea/
+
+# Router fine-tuning: Python environment and the GGUF converter checkout
+model/training/.venv/
+model/training/llama.cpp/

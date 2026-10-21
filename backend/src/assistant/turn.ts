@@ -1,16 +1,29 @@
 import type { ClientFrame, PlaceView, RecordView, ServerFrame, ToolName } from "@waypoint-ai/shared";
-import { getConversationMessages, getConversationTripPlan, saveConversationTurn } from "../data/conversation.repository.js";
+import { getConversationMessages, getConversationTripPlan, saveConversationTurn as saveTurnToHistory } from "../data/conversation.repository.js";
 import { getPlaceDetails, getPlacesByIds, getRecordDetails, getSources, searchNearbyPlaces, searchPlaces } from "../data/record.repository.js";
 import { ALLOWED_TOOLS } from "../tools/allowlist.js";
 import { assistantToolDefinitions, executeAssistantTool, type SearchArea, type ToolExecutionResult } from "../tools/assistant-tools.js";
 import { formatPlaceResultsMessage } from "./place-results-message.js";
 import { CitationRegistry, stripCitationRefs } from "./citations.js";
+import { parseRouterOutput, ROUTER_FORMAT, routerMessages } from "./router.js";
+
+/** A router answer is one short JSON object. */
+const ROUTER_MAX_TOKENS = 160;
+import { buildLessonBlock, type AppliedLesson, type Lesson } from "./lessons.js";
+import { enabledLessons, markLessonsApplied } from "../data/training.repository.js";
+import { recordTurn as journalTurn } from "../data/journal.repository.js";
+
+/** The journal is local working data; it can be switched off (JOURNAL_ENABLED=false). */
+const recordTurn: typeof journalTurn = (entry) => (env.JOURNAL_ENABLED ? journalTurn(entry) : Promise.resolve());
+import { normalizeToolArguments } from "../tools/search-events.js";
 import { chat, OllamaUnavailableError, type ChatMessage, type ChatOptions, type ToolDefinition } from "../llm/ollama.provider.js";
 
 /** A tool call needs well under this many tokens; a plain-text first answer is cut here and retried. */
 const FIRST_STEP_MAX_TOKENS = 160;
 /** Answers without data are short; the cap keeps a chatty reply from taking a minute on a laptop GPU. */
 const REPLY_MAX_TOKENS = 320;
+/** turn.progress at most four times a second, so a fast model does not flood the socket. */
+const PROGRESS_INTERVAL_MS = 250;
 import { env } from "../config/env.js";
 import { releaseInference, tryAcquireInference } from "../llm/inference-gate.js";
 import { resolveSettlement } from "../data/settlement.repository.js";
@@ -26,10 +39,47 @@ import { PLAN_TRIP_TOOL, planTripToolDefinition } from "../tools/plan-trip.js";
 import { REPLY_TOOL, replyToolDefinition } from "../tools/reply.js";
 import { classifyPlanIntent, type PlanIntent } from "./plan-intent.js";
 
+export interface TurnOptions {
+  /** Lessons to apply; null applies none (an exam run without lessons). Defaults to the enabled lessons. */
+  lessons?: Lesson[] | null;
+  /** Called with the lessons that reached the model. */
+  onLessons?: (applied: AppliedLesson[]) => void;
+  /** Called for every tool the model calls, with its parsed arguments (exam checks). */
+  onToolCall?: (tool: string, args: unknown) => void;
+  /** Exam turns are not stored in the conversation history. */
+  ephemeral?: boolean;
+  /**
+   * Benchmark turns stop at the model's first tool call: the calls are reported through onToolCall and nothing is
+   * executed or answered. A first answer without a tool call ends the turn too.
+   */
+  firstStepOnly?: boolean;
+  /** Another installed model for this turn (benchmark comparisons); set only by the server. */
+  model?: string;
+  /**
+   * The model that picks the first tool call from the short router prompt (assistant/router.ts); null uses the full
+   * prompt. Defaults to ROUTER_MODEL. Set only by the server.
+   */
+  routerModel?: string | null;
+}
+
 export async function processTurn(
   frame: Extract<ClientFrame, { type: "turn.submit" }>, conversationId: string, signal: AbortSignal,
-  emit: (event: ServerFrame) => void,
+  sendFrame: (event: ServerFrame) => void,
+  options: TurnOptions = {},
 ): Promise<void> {
+  // What the journal keeps of this turn: each tool call with its outcome, and how the turn ended.
+  const journalCalls: Array<{ tool: string; args: unknown; error?: string | null; resultCount?: number | null }> = [];
+  const journal: { errorCode: string | null; clarification: boolean; placeNotFound: string | null; retriedWithoutTool: boolean; cancelled: boolean } = { errorCode: null, clarification: false, placeNotFound: null, retriedWithoutTool: false, cancelled: false };
+  /** Models this turn called, sent with the answer for its header. */
+  const modelsUsed = new Set<string>();
+  const emit = (event: ServerFrame) => {
+    if (event.type === "turn.completed" && modelsUsed.size) event = { ...event, models: [...modelsUsed] };
+    if (event.type === "turn.error") journal.errorCode = event.code;
+    if (event.type === "turn.clarification") journal.clarification = true;
+    if (event.type === "turn.cancelled") journal.cancelled = true;
+    sendFrame(event);
+  };
+  const saveConversationTurn: typeof saveTurnToHistory = options.ephemeral ? async () => {} : saveTurnToHistory;
   const language = frame.scope.language ?? "en";
   if (frame.scope.polygonIds?.length) {
     emit({ protocolVersion: 1, type: "turn.error", requestId: frame.requestId, code: "source_unavailable", message: text(language, "Фильтр по области пока не подключён к данным сервера.", "Area filtering is not connected to the server data yet."), retryable: false });
@@ -71,13 +121,24 @@ export async function processTurn(
   let editablePlan: { plan: TripPlan; places: PlaceView[] } | null = null;
   let history: ChatMessage[] = [];
   let stepCount = 0;
-  /** One line of the progress feed the chat shows while the turn runs. */
+  /** Steps still running, latest last: a model call reports its progress on the latest one. */
+  const runningSteps: string[] = [];
+  /** One line of the progress feed the chat shows while the turn runs; done and failed carry the step's duration. */
   const startStep = (label: string) => {
     const stepId = `step-${++stepCount}`;
-    const send = (state: "running" | "done" | "failed", detail?: string) => emit({ protocolVersion: 1, type: "turn.step", requestId: frame.requestId, stepId, label: label.slice(0, 160), state, ...(detail ? { detail: detail.slice(0, 160) } : {}) });
+    const startedAt = performance.now();
+    const send = (state: "running" | "done" | "failed", detail?: string) => {
+      if (state !== "running") runningSteps.splice(runningSteps.indexOf(stepId) >>> 0, 1);
+      emit({
+        protocolVersion: 1, type: "turn.step", requestId: frame.requestId, stepId, label: label.slice(0, 160), state,
+        ...(detail ? { detail: detail.slice(0, 160) } : {}), ...(state === "running" ? {} : { durationMs: Math.round(performance.now() - startedAt) }),
+      });
+    };
+    runningSteps.push(stepId);
     send("running");
     return { done: (detail?: string) => send("done", detail), fail: (detail?: string) => send("failed", detail) };
   };
+
   /** Replies assembled from database rows go out section by section, in the order they were built. */
   const emitSections = (message: string) => {
     const sections = message.split("\n\n");
@@ -113,19 +174,49 @@ export async function processTurn(
     }
     const coverage = await placeCoverage().catch(() => "the imported regions");
     const selectedContext = await resolveSelectedMapItem(frame.scope.selectedMapItem, allowedSourceIds, frame.scope.dateRange);
+    // Lessons are optional: a missing table or a database error must not stop the answer.
+    const lessons = options.lessons === null ? null : buildLessonBlock(options.lessons ?? await enabledLessons().catch((error: unknown) => {
+      console.warn("Lessons unavailable", { error: error instanceof Error ? error.message : error });
+      return [];
+    }), frame.message);
     databaseDurationMs += Math.round(performance.now() - databaseStartedAt);
     messages = [
       { role: "system", content: `${SYSTEM_PROMPT.replace("{{PLACE_COVERAGE}}", coverage)}\nResponse language: ${language === "ru" ? "Russian" : language === "de" ? "German" : "English"}. Always answer in this language.\nAllowed sources: ${allowedSourceIds?.length ? allowedSourceIds.join(", ") : "all available"}. Date range: ${frame.scope.dateRange?.from ?? "not set"} — ${frame.scope.dateRange?.to ?? "not set"}.` },
+      ...(lessons ? [{ role: "system" as const, content: lessons.content }] : []),
       ...conversationHistory,
       ...(selectedContext ? [{ role: "system" as const, content: `User-selected map object (verified from the local database; use it as the main referent for “this point” or “this place”):\n${JSON.stringify(selectedContext)}` }] : []),
       ...(editablePlan ? [{ role: "system" as const, content: `Current trip plan shown on the map (stops from the local database). To change it, call ${EDIT_TRIP_PLAN_TOOL} once per change, naming stops by ref or name; to plan other cities from scratch, call ${PLAN_TRIP_TOOL}.\n${describePlanForModel(editablePlan.plan, editablePlan.places)}` }] : []),
       { role: "user", content: frame.message },
     ];
+    if (lessons) {
+      const titles = lessons.applied.map((lesson) => lesson.title).join("; ");
+      startStep(text(language, `Применены уроки: ${lessons.applied.length}`, `Lessons applied: ${lessons.applied.length}`)).done(titles);
+      options.onLessons?.(lessons.applied);
+      if (!options.ephemeral) void markLessonsApplied(lessons.applied.map((lesson) => lesson.id)).catch(() => undefined);
+    }
     const toolCallLimit = 4;
     emit({ protocolVersion: 1, type: "turn.status", requestId: frame.requestId, phase: "understanding", label: text(language, "Анализирую запрос", "Understanding your request") });
-    const callModel = async (callMessages: ChatMessage[], tools: ToolDefinition[], options: ChatOptions = {}) => {
+    const callModel = async (callMessages: ChatMessage[], tools: ToolDefinition[], callOptions: ChatOptions = {}) => {
       const startedAt = performance.now();
-      const response = await chat(callMessages, tools, signal, options);
+      modelsUsed.add(callOptions.model ?? options.model ?? env.OLLAMA_MODEL);
+      // Progress of this call on the running step: reading the prompt until the first token, then the tokens so far.
+      const stepId = runningSteps.at(-1);
+      let firstTokenAt = 0;
+      let lastProgressAt = 0;
+      const progress = (phase: "reading" | "generating", tokens: number) => {
+        if (!stepId || !runningSteps.includes(stepId)) return;
+        const now = performance.now();
+        if (phase === "generating" && tokens > 1 && now - lastProgressAt < PROGRESS_INTERVAL_MS) return;
+        lastProgressAt = now;
+        const seconds = (now - firstTokenAt) / 1000;
+        emit({ protocolVersion: 1, type: "turn.progress", requestId: frame.requestId, stepId, phase, tokens, ...(phase === "generating" && tokens > 1 && seconds > 0.2 ? { tokensPerSecond: Math.round((tokens - 1) / seconds * 10) / 10 } : {}) });
+      };
+      progress("reading", 0);
+      const onToken = (tokens: number) => {
+        if (tokens === 1) firstTokenAt = performance.now();
+        progress("generating", tokens);
+      };
+      const response = await chat(callMessages, tools, signal, { ...(options.model ? { model: options.model } : {}), onToken, ...callOptions });
       modelCallCount += 1;
       modelDurationMs += response.metrics.totalDurationMs;
       promptEvaluationDurationMs += response.metrics.promptEvaluationDurationMs;
@@ -174,6 +265,15 @@ export async function processTurn(
     let replyRequested = false;
     let streamed = false;
     let thinking = startStep(text(language, "Понимаю запрос", "Understanding the request"));
+    const routerModel = options.routerModel === undefined ? env.ROUTER_MODEL ?? null : options.routerModel;
+    const routeFirstStep = async (model: string) => {
+      const response = await callModel(routerMessages(frame.message, Boolean(selectedContext)), [], { format: ROUTER_FORMAT, maxTokens: ROUTER_MAX_TOKENS, model });
+      const decision = parseRouterOutput(response.message.content);
+      console.info("Assistant router decision", { requestId: frame.requestId, model, ...(decision.ok ? { tool: decision.tool } : { error: decision.error }) });
+      if (!decision.ok) return null;
+      // A reply needs no tool, so the turn continues as if the model had called reply.
+      return { ...response, message: { role: "assistant" as const, content: "", tool_calls: [{ function: { name: decision.tool, arguments: decision.args } }] } };
+    };
     for (let iteration = 0; iteration < 4 && !finished; iteration += 1) {
       // After events, records, or sources were fetched, the model's answer is the reply itself, so it is streamed.
       // First steps are not: a plain-text first answer may be withheld, and place and plan replies come from rows.
@@ -181,7 +281,10 @@ export async function processTurn(
       const writing = streamAnswer ? startStep(text(language, "Пишу ответ", "Writing the answer")) : null;
       // The first call only has to choose a tool; a short token budget stops a small model that starts writing a
       // long plain-text answer instead (that text would be withheld anyway) from costing a minute.
-      const response = await callModel(messages, toolsForTurn, {
+      // The router picks the first call from a short prompt; a reply, an invalid answer, or a plan on the map (which
+      // needs the plan in the prompt) goes the usual way.
+      const routed = iteration === 0 && !retriedWithoutTool && routerModel && !editablePlan ? await routeFirstStep(routerModel) : null;
+      const response = routed ?? await callModel(messages, toolsForTurn, {
         ...(streamAnswer ? { onDelta: (fragment: string) => {
           streamed = true;
           emit({ protocolVersion: 1, type: "assistant.delta", requestId: frame.requestId, text: fragment });
@@ -193,11 +296,18 @@ export async function processTurn(
       const assistantMessage = response.message;
       messages.push({ role: "assistant", content: assistantMessage.content ?? "", tool_calls: assistantMessage.tool_calls?.map((call, index) => ({ type: "function", function: { ...call.function, index } })) });
       const calls = assistantMessage.tool_calls ?? [];
+      if (options.firstStepOnly) {
+        for (const call of calls) options.onToolCall?.(call.function.name, normalizeToolArguments(call.function.arguments));
+        turnOutcome = "completed";
+        emit({ protocolVersion: 1, type: "turn.completed", requestId: frame.requestId, conversationId, assistantMessage: calls.length ? "" : assistantMessage.content.trim(), appliedFilters: [], result: { total: 0, records: [], mapFeatures: { type: "FeatureCollection", features: [] } }, sources: [] });
+        return;
+      }
       if (calls.length === 0) {
         // The first step must be a tool call: a data tool, or reply for messages that need no data. A plain-text
         // first answer skipped the lookup and could name places that are not in the database, so it is retried once.
         if (toolCallsExecuted === 0 && !retriedWithoutTool) {
           retriedWithoutTool = true;
+          journal.retriedWithoutTool = true;
           console.warn("Assistant answered without a tool call; retrying", { requestId: frame.requestId, text: assistantMessage.content.slice(0, 300) });
           // The unverified text is dropped so it is neither shown nor stored in the history.
           messages.pop();
@@ -231,6 +341,9 @@ export async function processTurn(
         toolCallsExecuted += 1;
         const toolCallName = call.function.name;
         console.info("Assistant tool call", { requestId: frame.requestId, iteration, tool: toolCallName, arguments: call.function.arguments });
+        options.onToolCall?.(toolCallName, normalizeToolArguments(call.function.arguments));
+        const journalCall: (typeof journalCalls)[number] = { tool: toolCallName, args: normalizeToolArguments(call.function.arguments) };
+        journalCalls.push(journalCall);
         if (toolCallName === REPLY_TOOL) {
           replyRequested = true;
           finished = true;
@@ -250,6 +363,7 @@ export async function processTurn(
           const outcome = await executePlanTrip(call.function.arguments, planTripDependencies(allowedSourceIds), allowedSourceIds);
           toolDurationMs += Math.round(performance.now() - toolStartedAt);
           console.info("Assistant plan_trip call", { requestId: frame.requestId, arguments: call.function.arguments, outcome: outcome.kind });
+          if (outcome.kind === "error") journalCall.error = String(outcome.error).slice(0, 120);
           if (outcome.kind === "planned") createdPlan = { plan: outcome.plan, places: outcome.places };
           if (outcome.kind === "ask_route_mode") routeModeQuestion = outcome.cities;
           if (outcome.kind === "error") toolStep.fail(text(language, "не получилось, уточняю", "did not work, checking"));
@@ -267,6 +381,7 @@ export async function processTurn(
           const outcome = await runTripPlanEdit(current, call.function.arguments, allowedSourceIds);
           toolDurationMs += Math.round(performance.now() - toolStartedAt);
           console.info("Assistant edit_trip_plan call", { requestId: frame.requestId, arguments: call.function.arguments, ok: outcome.ok, ...(outcome.ok ? {} : { error: outcome.error }) });
+          if (!outcome.ok) journalCall.error = String(outcome.error).slice(0, 120);
           if (outcome.ok) editedPlan = { plan: outcome.plan, places: outcome.places, changes: [...(current?.changes ?? []), ...outcome.changes] };
           if (outcome.ok) toolStep.done();
           else toolStep.fail(text(language, "не получилось, уточняю", "did not work, checking"));
@@ -288,6 +403,10 @@ export async function processTurn(
         );
         toolDurationMs += Math.round(performance.now() - toolStartedAt);
         messages.push({ role: "tool", tool_name: toolName, content: JSON.stringify(citations.annotate(result.content, result)) });
+        const resultError = result.content && typeof result.content === "object" && "error" in result.content ? String((result.content as { error: unknown }).error) : null;
+        journalCall.error = resultError?.slice(0, 120) ?? null;
+        journalCall.resultCount = resultError ? null : result.resultsFound;
+        if (resultError === "place_not_found") journal.placeNotFound = String((result.content as { place?: unknown }).place ?? "").slice(0, 100) || null;
         if (result.records) {
           found = result.records;
           totalRecords = result.totalRecords ?? result.records.length;
@@ -325,6 +444,7 @@ export async function processTurn(
       const writing = startStep(text(language, "Пишу ответ", "Writing the answer"));
       const response = await callModel([
         { role: "system", content: replyPrompt(language, editablePlan ? describePlanForModel(editablePlan.plan, editablePlan.places) : null, coverage) },
+        ...(lessons ? [{ role: "system" as const, content: lessons.content }] : []),
         ...messages.filter((entry) => (entry.role === "user" || entry.role === "assistant") && !entry.tool_calls?.length),
       ], [], { maxTokens: REPLY_MAX_TOKENS, onDelta: (fragment) => {
         streamed = true;
@@ -416,6 +536,28 @@ export async function processTurn(
     const errorMessage = aborted ? text(language, "Локальная модель прервала обработку. Попробуйте повторить запрос или разделить его на части.", "The local model interrupted generation. Try again or split the request into smaller parts.") : modelUnavailable ? text(language, "Не удалось подключиться к локальной модели. Проверьте, запущен ли Ollama и загружена ли выбранная модель.", "Could not connect to the local model. Check that Ollama is running and the selected model is installed.") : language === "de" ? `Der Server konnte keine Antwort vorbereiten. Versuchen Sie es erneut. Fehlercode: ${frame.requestId}.` : text(language, `Сервер не смог подготовить ответ. Повторите запрос; если ошибка повторится, передайте разработчику код ${frame.requestId}.`, `The server could not prepare a reply. Try again; if it happens again, share error code ${frame.requestId} with the developer.`);
     emit({ protocolVersion: 1, type: "turn.error", requestId: frame.requestId, code: aborted ? "timeout" : modelUnavailable ? "model_unavailable" : "internal_error", message: errorMessage, retryable: true });
   } finally {
+    if (!options.ephemeral) {
+      const dataCalls = journalCalls.filter((call) => call.tool !== REPLY_TOOL && call.tool !== "list_sources");
+      void recordTurn({
+        requestId: frame.requestId,
+        conversationId,
+        workspaceId,
+        language,
+        message: frame.message,
+        model: options.model ?? env.OLLAMA_MODEL,
+        toolCalls: journalCalls,
+        firstTool: journalCalls[0]?.tool ?? null,
+        outcome: journal.cancelled ? "cancelled" : journal.errorCode ? "error" : journal.clarification ? "clarification" : "completed",
+        errorCode: journal.errorCode,
+        signals: {
+          ...(dataCalls.some((call) => call.resultCount === 0) ? { emptyResult: true } : {}),
+          ...(journal.placeNotFound ? { placeNotFound: journal.placeNotFound } : {}),
+          ...(journalCalls.some((call) => call.error && /invalid|unknown|unsupported/i.test(call.error)) ? { invalidArgs: true } : {}),
+          ...(journal.retriedWithoutTool ? { retriedWithoutTool: true } : {}),
+        },
+        durationMs: Math.round(performance.now() - turnStartedAt),
+      }).catch((error: unknown) => console.warn("Journal write failed", { error: error instanceof Error ? error.message : error }));
+    }
     console.info("Assistant turn performance", {
       requestId: frame.requestId,
       outcome: turnOutcome,
