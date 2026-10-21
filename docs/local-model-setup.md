@@ -54,6 +54,7 @@ Do not start the model server or download weights automatically as part of appli
 | `backend/src/config/env.ts` | Parse and export the complete backend environment |
 | `backend/src/llm/ollama.provider.ts` | Ollama transport and response mapping |
 | `backend/src/assistant/turn.ts` | Turn coordination and bounded model/tool orchestration |
+| `backend/src/assistant/turn-reporter.ts` | Progress feed steps, token progress, and turn timing |
 | `backend/src/tools/` | Allowlisted, validated backend functions |
 | `backend/src/data/` | Repository access to local data stores |
 

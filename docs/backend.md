@@ -8,9 +8,10 @@ Node.js 24 LTS, TypeScript, Express, and Zod; PostgreSQL through Sequelize v6; n
 
 ```text
 backend/src/
-├── server.ts            # Express server and WebSocket attachment
+├── server.ts            # Express app, routes, WebSocket attachment, startup and shutdown
+├── setup/               # wiring of background import jobs and of the training routes and services
 ├── api/                 # health, capabilities, sources, WebSocket
-├── assistant/           # turn lifecycle, scope, orchestration
+├── assistant/           # turn lifecycle (turn.ts), its progress frames (turn-reporter.ts), prompts, tool helpers, result frames
 ├── llm/                 # provider protocol and Ollama adapter
 ├── tools/               # validated read-only functions
 ├── voice/               # demo, opt-in speech-to-text relay (OpenAI Realtime adapter)

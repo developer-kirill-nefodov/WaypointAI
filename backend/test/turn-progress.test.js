@@ -55,3 +55,34 @@ test("describes turn.progress, step durations, and the models of a turn in the W
   assert.equal(server({ ...base, type: "turn.step", stepId: "step-1", label: "Understanding", state: "done", durationMs: 4800 }), true);
   assert.equal(server({ ...base, type: "turn.completed", conversationId: "c", assistantMessage: "ok", appliedFilters: [], result: { total: 0, records: [], mapFeatures: { type: "FeatureCollection", features: [] } }, sources: [], models: ["qwen3:4b"] }), true);
 });
+
+test("reports steps with durations and throttles token progress on the latest running step", async () => {
+  const { TurnReporter, PROGRESS_INTERVAL_MS } = await import("../src/assistant/turn-reporter.ts");
+  let clock = 0;
+  const frames = [];
+  const reporter = new TurnReporter("req-1", (frame) => frames.push(frame), () => clock);
+  const outer = reporter.step("Understanding");
+  const onToken = reporter.modelProgress();
+  clock = 100; onToken(1);
+  clock = 150; onToken(2);
+  clock = 100 + PROGRESS_INTERVAL_MS + 1; onToken(3);
+  clock = 1000; outer.done("ok");
+  onToken(4);
+  reporter.models.add("model-a");
+  reporter.emit({ protocolVersion: 1, type: "turn.completed", requestId: "req-1", conversationId: "c", assistantMessage: "", appliedFilters: [], result: { total: 0, records: [], mapFeatures: { type: "FeatureCollection", features: [] } }, sources: [] });
+  const progress = frames.filter((frame) => frame.type === "turn.progress");
+  assert.deepEqual(progress.map((frame) => [frame.phase, frame.tokens]), [["reading", 0], ["generating", 1], ["generating", 3]]);
+  assert.ok(progress.every((frame) => frame.stepId === "step-1"));
+  assert.equal(progress[2].tokensPerSecond, 8);
+  const done = frames.find((frame) => frame.type === "turn.step" && frame.state === "done");
+  assert.equal(done.durationMs, 1000);
+  assert.equal(done.detail, "ok");
+  assert.deepEqual(frames.at(-1).models, ["model-a"]);
+});
+
+test("notes how a turn ended for the journal", async () => {
+  const { TurnReporter } = await import("../src/assistant/turn-reporter.ts");
+  const reporter = new TurnReporter("req-2", () => undefined);
+  reporter.emit({ protocolVersion: 1, type: "turn.error", requestId: "req-2", code: "timeout", message: "x", retryable: true });
+  assert.deepEqual(reporter.ending, { errorCode: "timeout", clarification: false, cancelled: false });
+});
