@@ -2,7 +2,7 @@ import { translate, type Language } from "./i18n";
 
 export type AppPage = "home" | "workspace" | "data" | "model";
 
-// Four pages do not justify a router dependency; the History API keeps the page across reloads
+// A few pages do not justify a router dependency; the History API keeps the page across reloads
 // and supports back/forward.
 const PAGE_PATHS: Record<AppPage, string> = {
   home: "/",
@@ -33,12 +33,12 @@ const PAGE_LABELS: Record<AppPage, PageLabel> = {
   },
   model: {
     title: ["Модель ИИ", "AI model"],
-    caption: ["ЛОКАЛЬНЫЙ ПОМОЩНИК", "LOCAL ASSISTANT"],
+    caption: ["МОДЕЛЬ · КАЧЕСТВО · ДООБУЧЕНИЕ", "MODEL · QUALITY · FINE-TUNING"],
   },
 };
 
-/** The former event explorer is now the map page's events mode. */
-const LEGACY_PATHS: Record<string, AppPage> = { "/investigation": "workspace" };
+/** The former event explorer is now the map page's events mode; the former training page is part of the model page. */
+const LEGACY_PATHS: Record<string, AppPage> = { "/investigation": "workspace", "/training": "model" };
 
 export function pageFromPath(pathname: string): AppPage {
   const normalized = pathname.replace(/\/+$/, "") || "/";

@@ -1,8 +1,28 @@
 import type { Citation, PlaceView, RecordView, SearchArea, SourceView, TripPlan } from "@waypoint-ai/shared";
 
 /** One line of the progress feed shown while a turn runs, kept on the answer it produced. */
-export type TurnStep = { id: string; label: string; state: "running" | "done" | "failed"; detail?: string };
-export type Message = { role: "assistant" | "user"; text: string; durationMs?: number; choices?: Array<{ id: string; label: string }>; steps?: TurnStep[]; streaming?: boolean; citations?: Citation[]; citationsMode?: "cited" | "shown_to_model" };
+/**
+ * One line of a turn's progress feed. startedAt is the client's clock when the step began (for the live timer);
+ * durationMs is the server's measure once it ended; progress is the model call running inside it.
+ */
+export type TurnStep = {
+  id: string; label: string; state: "running" | "done" | "failed"; detail?: string;
+  startedAt?: number; durationMs?: number;
+  progress?: { phase: "reading" | "generating"; tokens: number; tokensPerSecond?: number };
+};
+/** How a turn ended: an answer, a clarifying question, an error, a stop, or a lost connection. */
+export type MessageKind = "answer" | "clarification" | "error" | "cancelled" | "lost";
+/** What the answer put on the map, for its "on the map" line. */
+const MESSAGE_KINDS: MessageKind[] = ["answer", "clarification", "error", "cancelled", "lost"];
+export type ResultSummary = { places: number; records: number; tripDays: number | null };
+export type Message = {
+  role: "assistant" | "user"; text: string; durationMs?: number; choices?: Array<{ id: string; label: string }>; steps?: TurnStep[];
+  streaming?: boolean; citations?: Citation[]; citationsMode?: "cited" | "shown_to_model"; requestId?: string;
+  /** When the message was sent or the answer arrived (epoch ms). */
+  at?: number; kind?: MessageKind; models?: string[]; result?: ResultSummary;
+  /** The request an error or a stop belongs to, for "Send again". */
+  query?: string;
+};
 
 /** What the last completed turn of a chat put on the map, kept so the chat can be reopened with its results. */
 export interface ChatResult {
@@ -118,7 +138,16 @@ function readMessages(value: unknown): Message[] {
     Boolean(item && typeof item === "object" && "role" in item && "text" in item)
     && ((item as Message).role === "user" || (item as Message).role === "assistant")
     && typeof (item as Message).text === "string",
-  ).slice(-MAX_MESSAGES).map(({ streaming: _streaming, citations, citationsMode, ...message }) => {
+  ).slice(-MAX_MESSAGES).map(({ streaming: _streaming, citations, citationsMode, requestId, kind, models, result, at, query, ...message }) => {
+    if (typeof requestId === "string" && requestId.length <= 120) (message as Message).requestId = requestId;
+    // Fields added later are kept only in the shape the chat writes them.
+    if (typeof kind === "string" && MESSAGE_KINDS.includes(kind)) (message as Message).kind = kind;
+    if (Array.isArray(models) && models.length <= 4 && models.every((model) => typeof model === "string" && model.length <= 120)) (message as Message).models = models;
+    if (result && typeof result === "object" && [result.places, result.records].every((count) => Number.isInteger(count) && count >= 0) && (result.tripDays === null || Number.isInteger(result.tripDays))) {
+      (message as Message).result = { places: result.places, records: result.records, tripDays: result.tripDays };
+    }
+    if (typeof at === "number" && Number.isFinite(at)) (message as Message).at = at;
+    if (typeof query === "string" && query.length <= 4000) (message as Message).query = query;
     const valid = Array.isArray(citations) ? citations.filter(isCitation).slice(0, 20) : [];
     return valid.length ? { ...message, citations: valid, citationsMode: citationsMode === "shown_to_model" ? "shown_to_model" : "cited" } : message;
   }) : [];
