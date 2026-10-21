@@ -24,10 +24,11 @@ The model runs through a locally managed Ollama service. It can request a small 
 - Answers cite their data. Each event or place a tool shows the model gets a ref (`E1`, `P1`); the answer marks facts with it (`M3.1 near Norcia [E2]`), the server removes any ref no tool returned, and the chat shows the refs as chips that select the row on the map, with a "Sources of this answer" list linking to the row's page at INGV, USGS, or OpenStreetMap. When the model cites nothing, the list shows the rows it was given.
 - Cross-checked events. Earthquakes are imported from two independent catalogues, INGV and USGS; the same earthquake in both (within 30 s and 50 km) is matched at import and listed once. Each event says whether the other catalogue confirms it, describes it differently (magnitude or depth), or does not list it, and its details compare the two side by side.
 - Explicit empty, clarification, model-unavailable, and route-unavailable states.
-- Optional live voice dictation through OpenAI (disabled by default; the only feature that sends data off the machine). See [Voice input](#voice-input-demo-opt-in).
+- Optional live voice dictation through OpenAI (disabled by default; the only feature that sends what the user says off the machine). See [Voice input](#voice-input-demo-opt-in).
 - One map page with three modes: **Assistant** (the chat), **Events** (imported INGV and USGS earthquakes by period, magnitude, and source, cross-checked between the catalogues, with a period summary and details linked to nearby OSM places), and **Places** (the place catalog by country, city, and category). Any event or place can be handed to the assistant with "Ask the assistant": it becomes the selected map point and a ready question is offered. See [Map and events](#map-and-events-demo).
 - A **Data** page to explore, import, and delete datasets: every record page by page beside a map, countries and cities, and the import history.
-- A **Training** page to teach the assistant without changing model weights and to measure the effect. *Lessons* are rules ("always name the data source") and approved examples (a question and the right tool call or answer); the backend adds the enabled rules and the examples most similar to the message to the prompt, below every system rule, and the chat's progress feed shows which lessons applied. Lessons that try to override instructions or contain SQL, links, or code are refused, and an example's arguments are validated by that tool's own schema. The *exam* asks a set of questions as fresh chats (not stored) and checks the tool, its arguments, the answer's language, required and forbidden words, citations, and length; runs with and without lessons are drawn as a learning curve and compared question by question. See [Training](#training-lessons-and-exam).
+- A **Model** page (`/model`) to measure and improve the assistant: a benchmark generated from the local database, a journal of chat turns with failure signals, LoRA fine-tuning of a small router model with live stages, an optional OpenAI *teacher* that writes training examples in reviewed batches, export and import of trained models, and prompt lessons. See [Training](#training-benchmark-journal-fine-tuning).
+- A live chat: each answer is a card with the model that wrote it, the time, what it put on the map, sources, and its steps; while a turn runs, the card shows every step with a timer in tenths of a second and the model's tokens per second.
 
 The included OpenStreetMap extracts cover selected regions in Germany, Poland, Romania, France, Italy, and Spain; coverage is not complete in every country. Event records are imported on demand from INGV and USGS; an optional synthetic event set for offline demos is clearly labelled.
 
@@ -39,9 +40,12 @@ React + Vite
    v
 Express backend --- allowlisted tools --- Sequelize --- PostgreSQL
    |
-   +--- Ollama on loopback
+   +--- Ollama on loopback (main model, optional fine-tuned router)
    +--- optional routing provider (coordinates only)
-   +--- INGV and USGS event APIs (manual import, allowlisted hosts)
+   +--- INGV and USGS event APIs (import, allowlisted hosts)
+   +--- OpenStreetMap Overpass, Nominatim, Geofabrik (imports from the app, allowlisted hosts)
+   +--- local Python LoRA trainer and GGUF converter (model/training, child processes)
+   +--- OpenAI, opt-in: voice transcription and the training-data teacher
 ```
 
 See the [system workflow](docs/system-workflow.md), [stack decision](docs/stack-decision.md), [backend guide](docs/backend.md), [frontend guide](docs/frontend.md), [model setup](docs/local-model-setup.md), and [demo plan](docs/demo-plan.md).
@@ -105,9 +109,19 @@ arguments; the answers are mostly assembled by the server. Training is therefore
 3. **Fine-tuning** (`/model?tab=finetune`, `model/training/`). A small model (Qwen3 0.6B or 1.7B) is trained with
    LoRA as the **router**: it picks the first tool call from a short prompt and answers with JSON
    (`backend/src/assistant/router.ts`). The dataset is synthetic (another seed than the benchmark, benchmark questions
-   left out) plus confirmed journal turns, so it contains no unreviewed user data. The page builds the dataset, runs
-   `train_router.py` in a local Python environment, shows the loss, and publishes the merged model to Ollama; the
-   benchmark in router mode decides whether it is used (`ROUTER_MODEL` in `.env`).
+   left out) plus confirmed journal turns and accepted teacher examples, so it contains no unreviewed user data. The
+   page builds the dataset, runs `train_router.py` in a local Python environment, and shows the loss and the stages of
+   a run (training, merging, converting to GGUF, creating the Ollama model). Publishing runs in the background and can
+   start the router benchmark of the new model; the benchmark decides whether it is used (`ROUTER_MODEL` in `.env`).
+4. **Teacher** (optional, `/model?tab=finetune`). With `OPENAI_API_KEY` set, an OpenAI model (`TEACHER_MODEL`,
+   default `gpt-4.1-mini`) writes training questions with the right router call in batches per topic (exonyms, places,
+   events, trips, chat, mixed) through Structured Outputs. Every example is checked by the router's own schema, the
+   topic's tools, settlement resolution against the local database, the language, duplicates, and benchmark leaks, and
+   cross-checked by a second blind call; a person reviews, edits, and accepts a batch into the dataset. Only synthetic
+   prompts and settlement names are sent, never chat or journal text; `TEACHER_MAX_EXAMPLES_PER_DAY` caps the requests.
+5. **Export and import.** A trained run can be downloaded as a package (the LoRA adapter, or the merged GGUF model) and
+   imported on another machine. The package is a tar with a fixed list of files, a SHA-256 manifest, size limits, and a
+   checked LoRA config and weights header; pickle files are refused.
 
 On this laptop the local model generates about 2 tokens per second on the integrated GPU, so a turn spends most of its
 time writing even a short tool call; a smaller router model is the main lever for speed.
@@ -118,11 +132,11 @@ Open **Model** (`/model`; the old `/training` links redirect there). The **Overv
 
 - The exam shares the local model with the chat: while it runs (about half a minute per question on a laptop), a chat message waits or gets "busy", and the exam waits for a chat turn to finish.
 - Lessons and runs live in PostgreSQL (`lessons`, `eval_cases`, `eval_runs`, `eval_results`). Editing and starting runs need `TRAINING_ENABLED=true`; when unset it is on only with `NODE_ENV=development`, because there is no authentication and lessons reach every user's assistant.
-- This changes the prompt, not the model. Fine-tuning weights (LoRA) is a separate, later step; the approved examples are the dataset it would start from.
+- This changes the prompt, not the model; fine-tuning the router (above) usually helps more.
 
 ## Data and privacy boundaries
 
-The browser talks only to the backend. The backend is the only component that connects to Ollama and PostgreSQL. Model tool calls are validated, read-only, and bounded. Apart from the opt-in voice input, chat text never leaves the machine; the routing provider receives coordinates only. Conversation retention and the single-workspace demo limitations are documented in the [backend guide](docs/backend.md).
+The browser talks only to the backend. The backend is the only component that connects to Ollama and PostgreSQL. Model tool calls are validated, read-only, and bounded. Chat text never leaves the machine except through the opt-in voice input; the opt-in teacher sends only synthetic prompts and settlement names, and the routing provider receives coordinates only. Conversation retention and the single-workspace demo limitations are documented in the [backend guide](docs/backend.md).
 
 OpenStreetMap attribution and source metadata are shown in the app. The optional map tile and routing providers are separate external services; routing sends coordinates only. The demo does not provide user authentication or multi-workspace authorization and should not be used with sensitive data.
 
@@ -148,6 +162,13 @@ The **Map** page has one map and a side panel with three modes. **Events** searc
 | `JOURNAL_ENABLED` | `true` | Keeps chat turns in the local journal for review |
 | `JOURNAL_RETENTION_DAYS` | `30` | Journal entries older than this are deleted |
 | `ROUTER_MODEL` | unset | An Ollama model that picks the first tool call from the short router prompt (for example a fine-tuned `waypoint-router:<id>`) |
+| `TEACHER_MODEL` | `gpt-4.1-mini` | OpenAI model of the training-data teacher (needs `OPENAI_API_KEY`) |
+| `TEACHER_MAX_EXAMPLES_PER_DAY` | `2000` | Daily cap on examples requested from the teacher |
+| `OSM_OVERPASS_URL` | `https://overpass-api.de/api/interpreter` | Overpass API for area imports (allowlisted host) |
+| `OSM_NOMINATIM_URL` | `https://nominatim.openstreetmap.org/search` | Nominatim for finding a city or area (allowlisted host) |
+| `OSM_AREA_MAX_SQUARE_DEGREES` | `1` | Largest area one import may cover |
+| `OSM_REGION_MAX_BYTES` | `1500000000` | Largest Geofabrik region file a region import may download |
+| `OSM_REQUEST_TIMEOUT_MS` | `90000` | Timeout per Overpass or Nominatim request |
 | `TRUST_PROXY` | `false` | Reverse-proxy hop count for per-client rate limits |
 
 Start with these two documents:
@@ -159,7 +180,7 @@ Also: [extension plan](docs/extension-plan.md) and [known issues and fixes](docs
 
 ## Voice input (demo, opt-in)
 
-Voice input is the only feature that sends data to an external AI service, and it is **off by default**; model inference and chat text stay local, and the routing provider receives coordinates only. Set `VOICE_INPUT_ENABLED=true` and `OPENAI_API_KEY` in `.env` to show a microphone button in the chat composer. The backend relays audio to OpenAI Realtime transcription, and recognized text appears in the composer as you speak. **Audio leaves the local machine while you record**, and the UI shows a notice during recording. The API key stays on the backend, and spending is capped: a process-wide limit on open sessions plus an hourly budget of sessions and recording seconds per client (`VOICE_MAX_CONCURRENT_SESSIONS`, `VOICE_SESSIONS_PER_CLIENT_PER_HOUR`, `VOICE_SECONDS_PER_CLIENT_PER_HOUR`). See the [voice protocol](contracts/websocket.md#voice-input-demo-opt-in) and the [stack decision](docs/stack-decision.md#voice-input-decision).
+Voice input is the only feature that sends what the user says to an external AI service, and it is **off by default**; model inference and chat text stay local, and the routing provider receives coordinates only. Set `VOICE_INPUT_ENABLED=true` and `OPENAI_API_KEY` in `.env` to show a microphone button in the chat composer. The backend relays audio to OpenAI Realtime transcription, and recognized text appears in the composer as you speak. **Audio leaves the local machine while you record**, and the UI shows a notice during recording. The API key stays on the backend, and spending is capped: a process-wide limit on open sessions plus an hourly budget of sessions and recording seconds per client (`VOICE_MAX_CONCURRENT_SESSIONS`, `VOICE_SESSIONS_PER_CLIENT_PER_HOUR`, `VOICE_SECONDS_PER_CLIENT_PER_HOUR`). See the [voice protocol](contracts/websocket.md#voice-input-demo-opt-in) and the [stack decision](docs/stack-decision.md#voice-input-decision).
 
 ## Development checks
 

@@ -73,7 +73,7 @@ export default function AppRail(props: AppRailProps) {
             <div><dt>{t("Модель", "Model")}</dt><dd><code>{props.modelLabel}</code></dd></div>
             <div><dt>{t("Статус", "Status")}</dt><dd className={props.healthy ? "ok" : "warn"}><i className="rail-dot" aria-hidden />{props.statusText}</dd></div>
             <div><dt>{t("Сервер", "Server")}</dt><dd>{props.connectionText}</dd></div>
-            {props.demo && <div><dt>{t("Режим", "Mode")}</dt><dd>{t("Демо: только синтетические данные", "Demo: synthetic data only")}</dd></div>}
+            {props.demo && <div><dt>{t("Режим", "Mode")}</dt><dd>{t("Демо: без входа, открытые данные на этом компьютере", "Demo: no sign-in, open data on this machine")}</dd></div>}
           </dl>
           {props.reconnecting && <button type="button" className="data-text-button" onClick={props.onReconnect}><RefreshCw size={12} />{t("Подключиться сейчас", "Connect now")}</button>}
         </div>}

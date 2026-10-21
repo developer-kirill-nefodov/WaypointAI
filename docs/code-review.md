@@ -2,6 +2,8 @@
 
 This is the issue log for the event explorer and the parts of the assistant it touches: what was found while building and testing it, how each issue was fixed, and what is still open. Each entry was checked against the code before it was fixed or left open.
 
+Paths are as they were when each issue was fixed. Since then `InvestigationWorkspace.tsx` and `QueryBar.tsx` were folded into the Events mode of the map page (`frontend/src/features/investigation/EventsPanel.tsx`; plain-language questions go to the assistant chat), and `backend/src/assistant/trip-clarification.ts` was replaced by the `plan_trip` and `edit_trip_plan` tools.
+
 Current verification: `npm test` and `npm run test:db` (PostgreSQL, disposable database) pass in CI together with `npm run typecheck` and `npm run build`; a live INGV import runs against the HTTP code.
 
 No SQL injection was found: every value is a bind parameter and dynamic SQL fragments are constants. The external source URL comes only from an allowlisted environment value.

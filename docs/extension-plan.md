@@ -6,7 +6,7 @@ The goal is to extend WaypointAI into a small investigation workspace for open-s
 
 ## 1. Current architecture
 
-All claims below come from source code and the local database, not from the README.
+All claims below come from source code and the local database, not from the README. They describe the code at the time of this audit: since then the app maps pages to paths in `frontend/src/shared/routing.ts`, the investigation page became the Events mode of the map page (`features/investigation/EventsPanel.tsx`), `InvestigationWorkspace.tsx` and `QueryBar.tsx` were removed, and `AssistantWorkspace.tsx` was split into smaller modules (596 lines).
 
 ### Frontend
 

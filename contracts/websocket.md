@@ -351,7 +351,7 @@ Voice lifecycle: `voice.start` → `voice.ready` → zero or more `voice.transcr
 
 ## Turn lifecycle
 
-Normal turn: `turn.accepted` → zero or more `turn.status` / tool events / `assistant.delta` → exactly one terminal event (`turn.completed`, `turn.clarification`, `turn.cancelled`, or `turn.error`). Terminal event frees the connection for its next turn.
+Normal turn: `turn.accepted` → zero or more `turn.status` / `turn.step` / `turn.progress` / tool events / `assistant.delta` → exactly one terminal event (`turn.completed`, `turn.clarification`, `turn.cancelled`, or `turn.error`). Terminal event frees the connection for its next turn.
 
 ## Versioning and compatibility
 

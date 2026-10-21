@@ -169,7 +169,7 @@ The project rules require synthetic demo fixtures. If the network is unavailable
 
 | Decision | Choice | Reason |
 |---|---|---|
-| Navigation | New `investigation` value in the existing `activePage` state | No router exists; adding one is out of scope |
+| Navigation | New `investigation` value in the existing `activePage` state | No router existed then; adding one was out of scope. Superseded: pages now map to paths in `frontend/src/shared/routing.ts`, and the investigation page became the map's Events mode (`/map?mode=events`) |
 | Map | Reuse `MapPanel` with events as `records` | It already renders records with popups |
 | Data fetching | `fetch` with `AbortController` in `frontend/src/shared/api/investigations.ts` | Existing pattern in `client.ts`; no new library |
 | States | Distinct loading, empty, error, fallback-interpretation, and synthetic-source states | Project rule |

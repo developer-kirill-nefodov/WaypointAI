@@ -10,20 +10,21 @@ Node.js 24 LTS, TypeScript, Express, and Zod; PostgreSQL through Sequelize v6; n
 backend/src/
 ├── server.ts            # Express app, routes, WebSocket attachment, startup and shutdown
 ├── setup/               # wiring of background import jobs and of the training routes and services
-├── api/                 # health, capabilities, sources, WebSocket
+├── api/                 # HTTP routes (assistant, data, investigations, training, fine-tuning, teacher, journal) and WebSocket
 ├── assistant/           # turn lifecycle (turn.ts), its progress frames (turn-reporter.ts), prompts, tool helpers, result frames
 ├── llm/                 # provider protocol and Ollama adapter
 ├── tools/               # validated read-only functions
 ├── voice/               # demo, opt-in speech-to-text relay (OpenAI Realtime adapter)
-├── data/                # repositories and future client adapters
-├── sources/             # external event source adapters (INGV, USGS, synthetic demo)
-├── services/            # domain services such as event import
+├── data/                # repositories
+├── sources/             # external event source adapters (INGV, USGS, synthetic demo) and OpenStreetMap services
+├── services/            # imports, benchmark and exam runner, LoRA trainer, model packages, OpenAI teacher
 ├── cli/                 # manual OSM and event import commands
 ├── models/              # Sequelize models
-├── migrations/          # versioned PostgreSQL schema changes
 ├── schemas/             # wire and domain validation
 └── config/              # environment validation
 ```
+
+Migrations live in `backend/database/migrations/` and tests in `backend/test/`.
 
 Domain logic depends on provider interfaces, not directly on a concrete Ollama SDK.
 
@@ -35,6 +36,10 @@ Domain logic depends on provider interfaces, not directly on a concrete Ollama S
 - `GET /api/v1/assistant/capabilities` — readiness, supported filters, safe model label, and demo flag.
 - `GET /api/v1/data/sources` — sources available to the current user/workspace, with `lastSync` for event sources.
 - `GET /api/v1/data/places` — local POI/address search by query, category, city, or bbox; capped at 500 points.
+- `GET /api/v1/data/datasets`, `/countries`, `/settlements`, `/catalog/places`, `/catalog/categories`, `/datasets/{id}/events`, `/geocode`, `/regions`, `/regions/{id}` — the Data page and the import dialog (see [Import jobs](#import-jobs)).
+- `POST /api/v1/map/route` — a road route between verified points through the optional routing provider (coordinates only).
+- `DELETE /api/v1/assistant/history` — deletes the stored conversations of the workspace.
+- `/api/v1/training/*` — lessons, benchmark cases and runs, the journal and aliases, fine-tuning (`/finetune`: dataset, runs, publish, export, import), and the teacher (`/teacher`: batches and examples). Editing needs `TRAINING_ENABLED`; see the sections below.
 - `GET /api/v1/investigations/events` — event search by time window (default 7 days, max 90), bbox or radius (max 300 km), magnitude, source, and category; keyset cursor pagination; at most 200 per page. A bbox combined with a radius is rejected with `invalid_area_filter`, and `minMagnitude` above `maxMagnitude` with `invalid_magnitude_range`.
 - `GET /api/v1/investigations/events/{id}` — one event with up to 20 linked nearby places, sources, and the last sync run.
 - `GET /api/v1/investigations/entities/{id}` — one place with its linked events.
@@ -61,7 +66,7 @@ The available tools are `search_records`, `get_record_details`, `search_places`,
 
 Trip plans are built and changed only through tools; the model never writes an itinerary. `plan_trip` (`tools/plan-trip.ts`, `assistant/plan-trip.ts`) takes up to five cities in local spelling with optional per-city days, `totalDays`, `routeMode`, and an optional airport code. The backend resolves each city against verified OSM settlements (unknown names go back to the model as an error), shares the days, finds attractions and museums around each city center (`city-trip-plan.ts`), and returns a typed `TripPlan`; when `routeMode` is missing it asks whether to add driving routes. The plan is stored with the conversation (`assistant_conversations.trip_plan`). `edit_trip_plan` (`assistant/trip-plan-edit.ts`) applies one operation per call to that stored plan: `add_stops`, `remove_stops`, `move_stop`, `add_day`, `remove_day`, `set_days`, `replace_day`, or `set_route_mode`. Existing stops are named by their ref in the plan the model sees ("1.2" = day 1, stop 2) or by name; new stops come from the nearest verified places of an allowed kind (attraction, museum, gallery, viewpoint, monument, castle, church, theatre, park, restaurant, cafe, bar) around the day's stops, and days an edit does not touch keep their stops. Both tools use strict Zod schemas; unused null fields are dropped first. The reply after a plan or an edit is built from verified rows, not by the model, and the stored history keeps only its first line so the small context window is not filled with stop lists. A question that changes nothing keeps the plan on the map. Without the model there is no trip planning: the chat reports that the local model is unavailable.
 
-Progress is sent as `turn.step` events (each step `running`, then `done` or `failed`). Model answers written after data was fetched, and answers that need no data, are streamed from Ollama as `assistant.delta` fragments; a `reply` is written by a separate tool-free call with a short prompt. Replies assembled from rows (plans, place lists) are sent section by section, and `turn.completed` carries the full text. Conversation text is stored in PostgreSQL and browser local storage with a limited retention period.
+Progress is sent as `turn.step` events (each step `running`, then `done` or `failed` with the server's `durationMs`) and, while a model call runs inside a step, `turn.progress` events (`reading` the prompt, then `generating` with the token count and tokens per second, at most four per second). `turn.completed.models` names the models the turn called. `assistant/turn-reporter.ts` builds these frames. Model answers written after data was fetched, and answers that need no data, are streamed from Ollama as `assistant.delta` fragments; a `reply` is written by a separate tool-free call with a short prompt. Replies assembled from rows (plans, place lists) are sent section by section, and `turn.completed` carries the full text. Conversation text is stored in PostgreSQL and browser local storage with a limited retention period.
 
 Assistant diagnostics log aggregate turn and model-call durations, Ollama prompt/generation timings and token counts, model ID, bounded result counts, and outcome. Route diagnostics log duration, point count, provider class, and outcome. They must not include prompts, place names, or coordinates.
 

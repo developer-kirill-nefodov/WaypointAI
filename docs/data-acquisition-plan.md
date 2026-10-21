@@ -4,7 +4,7 @@
 
 Provide a local place catalogue with visible provenance and bounded search for map and itinerary workflows.
 
-The current import covers six selected European areas: Berlin, Mazovia, Romania, Île-de-France, Central Italy, and Madrid. These are regional extracts except for Romania. They are not complete country-wide datasets in all cases.
+The current import covers six selected European areas: Berlin, Mazovia, Romania, Île-de-France, Central Italy, and Madrid. These are regional extracts except for Romania. They are not complete country-wide datasets in all cases. More data can be imported from the app's import dialog: the places of a city or area from the Overpass API (its own dataset, `osm-area-<name>`) or a whole Geofabrik region (`osm-region-<id>`); see the [backend guide](backend.md#import-jobs).
 
 ## Current import flow
 
@@ -20,7 +20,7 @@ Imported fields include names, categories, address fields, coordinates, and a bo
 | Country outline | Bundled Natural Earth country shapes | Show country context without a live boundary lookup |
 | Road route | Configured OSRM-compatible routing service | Return road geometry, stop order, distance, and duration for verified coordinates |
 | `places` | Named POIs and explicit address points with category, region/city, address, coordinates, and source ID | Place search and map display |
-| `records` | Optional records from a separately configured source; none are seeded in the default demo | General record search when a dataset is explicitly added |
+| `records` | Earthquake events imported from INGV and USGS (public catalogues), and optional records from other configured sources; nothing is seeded by default | Event search, cross-checks, and general record search |
 | `data_sources` | Provider, license, attribution, snapshot date, and import parameters | Provenance for each dataset |
 
 Do not assume a POI has a complete address. Preserve missing values as missing; never guess them.
@@ -50,4 +50,4 @@ Import summaries must not include personal data. Any future records dataset requ
 
 ## Limitations
 
-Current coverage is incomplete outside the full Romania extract. The node-only import omits many features represented as ways or relations. Expand the importer only when a concrete query needs that coverage and storage/runtime costs are understood. Before loading any sensitive or customer dataset, implement authentication, workspace authorization, least-privilege database access, and retention controls.
+Current coverage is incomplete outside the full Romania extract. The region import is node-only and omits many features represented as ways or relations; area imports from Overpass also take ways and relations, as their centre points. Expand the importer only when a concrete query needs that coverage and storage/runtime costs are understood. Before loading any sensitive or customer dataset, implement authentication, workspace authorization, least-privilege database access, and retention controls.

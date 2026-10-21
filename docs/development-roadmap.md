@@ -6,7 +6,10 @@
 - Express, PostgreSQL/Sequelize, and a local Ollama provider are connected.
 - Read-only backend tools provide place search, record search/details, and source metadata. Tool requests are validated and bounded.
 - Verified trip plans are assembled from database place rows. Day selection links stops and road routes to the map.
-- European OSM extracts are imported region by region. Synthetic event records are not seeded by default.
+- European OSM extracts are imported region by region; more cities, areas, and whole Geofabrik regions can be imported from the app.
+- Earthquakes are imported from INGV and USGS and cross-checked between the two catalogues; answers cite the rows they use. Synthetic event records are not seeded by default.
+- A Data page explores, imports, and deletes datasets; the map page has assistant, events, and places modes.
+- The Model page measures and improves tool choice: a benchmark generated from the database (EN/RU/DE, hard cases), a local turn journal with failure signals and review, LoRA fine-tuning of a small router model with export and import, and an opt-in OpenAI teacher for training examples.
 
 ## Work remaining
 
@@ -20,14 +23,14 @@
 
 - Keep repeatable place resolution, scope, sorting, and itinerary selection in deterministic backend code.
 - Maintain a compact system prompt and send only relevant verified results to the model.
-- Build representative EN/RU/DE quality checks for city/country distinctions, follow-ups, selected places, and empty data.
+- Extend the EN/RU/DE benchmark with follow-ups, selected places, and empty data; it already covers tool choice, arguments, exonyms, and languages.
 - Measure latency, memory, and tool-call correctness before changing the model or adding more capabilities.
 
 ### 3. Improve dataset coverage
 
 - Publish snapshot manifests with source, license, import date, and coverage region.
 - Confirm that UI labels explain partial regional coverage and missing matches.
-- Add ways/relations or additional regions only when a concrete scenario requires them.
+- Area imports already take ways and relations as their centres; add more regions only when a concrete scenario requires them.
 - Keep imports repeatable and avoid checked-in map extracts.
 
 ### 4. Prepare for multi-user data

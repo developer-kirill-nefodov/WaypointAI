@@ -4,7 +4,7 @@ The router picks the first tool call of a chat turn from a short prompt and answ
 (`backend/src/assistant/router.ts`). A small model fine-tuned on this exact task can replace the main model for that
 step: the router prompt is a few hundred tokens instead of several thousand, so the first step is much faster.
 
-1. **Dataset.** On the Model page (tab *Fine-tuning*), export the dataset. It is built from synthetic questions
+1. **Dataset.** On the Model page (tab *Fine-tuning*), build the dataset. It is built from synthetic questions
    generated from the local database (a different seed than the benchmark), from examples an OpenAI model (the
    teacher, `TEACHER_MODEL`) wrote in batches that a person accepted, and from journal turns a person confirmed;
    every question that is also in the benchmark is left out. It is written to

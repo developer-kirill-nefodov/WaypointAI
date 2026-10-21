@@ -8,17 +8,18 @@ The application uses React, TypeScript, and Vite, with Leaflet behind the indepe
 
 ```text
 frontend/src/
-├── app/                  # bootstrap, routes, global providers
+├── app/                  # bootstrap (App renders AssistantWorkspace; paths are mapped in shared/routing.ts)
 ├── features/assistant/   # the map page shell (AssistantWorkspace), chat cards and controls, turn steps, history
 ├── features/training/    # model page: overview, quality (benchmark, cases, lessons), journal, fine-tuning, teacher
-├── features/results/    # result rows, evidence, filter chips
 ├── features/voice/       # demo voice input: AudioWorklet capture, voice.* frames, mic button
-├── features/investigation/ # event search page: filters, table, details, sync status
-├── features/data/          # data page: datasets, countries and cities, import history, deletion
+├── features/investigation/ # the map's Events mode: filters, table, details, period summary, cross-check
+├── features/map/         # the map's Places mode: catalogue by country, city, and category
+├── features/imports/     # import dialog and dock (city or area, whole region, events)
+├── features/data/        # data page: datasets, countries and cities, import history, deletion
 ├── widgets/map/          # isolated map adapter
-├── entities/record/      # shared record view and selection
 └── shared/
     ├── api/              # WebSocket client and HTTP metadata client
+    ├── routing.ts        # pages and their paths (History API)
     ├── i18n.ts           # English, Russian, and German locale preference
     └── ui/               # app rail, reusable controls, and styles (styles.css imports styles/*.css in cascade order)
 ```
@@ -72,7 +73,7 @@ The browser never connects to OpenAI and never receives the API key.
 - Browser code must not call Ollama or public data sources directly.
 - Do not place prompts, IDs, or tokens in URL query strings.
 - Display only fields returned by the backend.
-- Keep the `demoMode=true` badge visible.
+- Keep the `demoMode=true` mark visible (the DEMO tag on the rail's status button).
 - Do not show stack traces, filesystem paths, or provider internals in user-facing errors.
 - Support keyboard use and text status in addition to color.
 - Request open driving trips from OSRM with the supported `roundtrip=false`, `source=first`, `destination=last` combination. A route line is rendered only when the backend returns valid road geometry; if the provider is unavailable, keep the verified stops visible and offer a retry.
