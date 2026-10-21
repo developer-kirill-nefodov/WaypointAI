@@ -4,7 +4,7 @@ import { invalidateCache, useCachedQuery } from "../../shared/data-cache";
 import { makeT, type Language, type Translator } from "../../shared/i18n";
 import { formatEventTime, pick } from "../investigation/format";
 import { finetuneApi, type LoraRun } from "./finetune-api";
-import { useChartWidth } from "./QualityTab";
+import { useChartWidth } from "./charts";
 import TeacherSection from "./TeacherSection";
 import { TrainingRequestError } from "./training-api";
 

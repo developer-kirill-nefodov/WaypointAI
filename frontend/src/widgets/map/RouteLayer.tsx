@@ -1,7 +1,6 @@
 import { useEffect, useMemo } from "react";
 import { divIcon, type LatLngExpression } from "leaflet";
 import { Marker, Polyline, Tooltip } from "react-leaflet";
-import type { Language } from "../../shared/i18n";
 import { buildRoute, type RoutePlan } from "../../shared/api/client";
 
 export type RoutePoint = { id: string; name: string; lat: number; lon: number; countryCode: string; city: string | null };

@@ -9,7 +9,8 @@ The application uses React, TypeScript, and Vite, with Leaflet behind the indepe
 ```text
 frontend/src/
 ├── app/                  # bootstrap, routes, global providers
-├── features/assistant/   # conversation, composer, status, filters, history
+├── features/assistant/   # the map page shell (AssistantWorkspace), chat cards and controls, turn steps, history
+├── features/training/    # model page: overview, quality (benchmark, cases, lessons), journal, fine-tuning, teacher
 ├── features/results/    # result rows, evidence, filter chips
 ├── features/voice/       # demo voice input: AudioWorklet capture, voice.* frames, mic button
 ├── features/investigation/ # event search page: filters, table, details, sync status
@@ -19,7 +20,7 @@ frontend/src/
 └── shared/
     ├── api/              # WebSocket client and HTTP metadata client
     ├── i18n.ts           # English, Russian, and German locale preference
-    └── ui/               # reusable controls and styles
+    └── ui/               # app rail, reusable controls, and styles (styles.css imports styles/*.css in cascade order)
 ```
 
 Wire shapes come from `contracts/websocket.schema.json`; shared TypeScript mirrors live in `packages/shared/src/protocol.ts`; semantics and examples are in `contracts/websocket.md`. REST types are generated from `contracts/openapi.yaml` into `packages/shared/src/openapi.generated.ts`.
@@ -32,7 +33,7 @@ The brand mark lives in `shared/ui/Logo.tsx`; `public/favicon.svg` uses the same
 
 ## Map page: assistant, events, places
 
-`/map` has one `MapPanel` and a side panel with three modes (`AssistantWorkspace.tsx`, `mapMode`, kept in `?mode=`). The events and places panels load on first use and stay mounted, so switching modes keeps their filters and lists.
+`/map` has one `MapPanel` and a side panel with three modes (`AssistantWorkspace.tsx`; the page and `mapMode` come from `useAppNavigation.ts` and are kept in the path and `?mode=`). The events and places panels load on first use and stay mounted, so switching modes keeps their filters and lists.
 
 - **Assistant**: the chat. Its map shows the chat's results, the trip plan, and the search radius. Two layer switches: *Places* (map-area places from the local snapshot) and *Events* (the last week's earthquakes as a background layer that is not framed or listed as results). The card of the selected item floats over the map (bottom left) with a close button and "Ask the assistant", which offers a ready question about it.
 - **Events** (`features/investigation/EventsPanel.tsx`): period, minimum magnitude, and sources; one status line with when the data was updated and a link to the data page (import runs and failures are shown only there); a period summary from the server (`total`, `magnitudeRange` over every match, the latest event); and the list. Events are requested with `merge=true`, so an earthquake that INGV and USGS both report is listed once; the list marks events another catalogue confirms (✓ USGS) or describes differently (⚠), and a filter shows only confirmed events. Selecting an event opens its details in a modal `<dialog>` with its provenance, the cross-check (`CrossCheck.tsx`: the event beside its copies in other catalogues, with time, magnitude, depth, and epicentre differences, or why there is no copy), and linked places; "Events within N km" pivots the search to a radius, "Show on the map" moves the map, and "Ask the assistant" makes it the selected map point and switches to the chat with a ready question. The map draws events as records and linked places as highlights, frames only the events, and draws the applied radius. An empty result offers to import recent events.
@@ -111,7 +112,7 @@ Answers carry citations from `turn.completed.citations`. `MarkdownMessage` turns
 `features/training/ModelPage.tsx` (`/model?tab=overview|quality|data|finetune`) joins the former model and training pages; `/training` and its old tab names (`model`, `exam`, `cases`, `lessons`, `journal`) redirect to the matching tab. The tabs are the page's only navigation: the header above them never changes height, the tab bar sticks to the top while the page scrolls, and a tab opened once stays mounted (hidden) so its expanded items, filters, and inputs survive a switch; each tab also keeps its scroll position, and a tab opened for the first time starts at the tab bar. The **improvement cycle** is a card at the top of Overview: journal candidates → dataset → LoRA training → benchmark (trained router vs. the main model in router mode) → in use (`ROUTER_MODEL`, with the line to copy once the trained router is not worse). Only the next step has a button, which opens the tab where it is done.
 
 - **Overview** (`OverviewTab.tsx`): the model card from the runtime (`/training/model`, nothing hard-coded) and the router in use, how a turn runs, the main model's latest benchmark with per-skill and per-language accuracy, the training path (developer stages, router LoRA, prompt lessons), and the seven tools with the guardrails and tips.
-- **Quality** (`QualityTab.tsx`): the model comparison (the latest complete run of every model and mode; overall, tool, arguments, skills, languages, median seconds per question from the results; the best value within a mode is highlighted; a row opens its run), the benchmark (mode, model, question sets, quality curve with 95% intervals, runs, per-question results compared with another run), the benchmark questions (collapsed), and **Advanced: prompt lessons** (rules and examples, editor, prompt preview).
+- **Quality** (`QualityTab.tsx` with `BenchmarkSection.tsx`, `CasesSection.tsx`, `LessonsSection.tsx`, and `charts.tsx`): the model comparison (the latest complete run of every model and mode; overall, tool, arguments, skills, languages, median seconds per question from the results; the best value within a mode is highlighted; a row opens its run), the benchmark (mode, model, question sets, quality curve with 95% intervals, runs, per-question results compared with another run), the benchmark questions (collapsed), and **Advanced: prompt lessons** (rules and examples, editor, prompt preview).
 - **Journal and data** (`JournalTab.tsx`): candidates with their signals, confirming the right call, data gaps with an import button, settlement aliases.
 - **Fine-tuning** (`FinetuneTab.tsx`): data from the teacher (`TeacherSection.tsx`: start a batch for a topic and languages, watch it fill, filter its examples by passed, disputed, and rejected with the reasons, edit, approve, or delete an example, replace the rejected ones, accept the batch into the dataset), the dataset, the Python environment, and LoRA training (optionally publishing and benchmarking right after). Each run shows its stages with times (loading, preparing examples, training with epoch, steps, ETA, and peak memory, saving, merging, converting to GGUF, Ollama, benchmark), a loss chart, publishing to Ollama, "Compare on the benchmark", which opens Quality in router mode with that model, and export as an adapter or a GGUF package. "Import a model" uploads a package with progress; the run appears once the server has checked it.
 

@@ -6,7 +6,8 @@ import { makeT, type Language } from "../../shared/i18n";
 import { navigateTo } from "../../shared/routing";
 import { formatEventTime, pick } from "../investigation/format";
 import { finetuneApi } from "./finetune-api";
-import { MetricsPanel, percent } from "./QualityTab";
+import { MetricsPanel } from "./charts";
+import { percent } from "./training-format";
 import { trainingApi, type TrainingStatus } from "./training-api";
 
 type Props = {

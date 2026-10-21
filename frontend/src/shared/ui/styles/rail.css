@@ -1,0 +1,40 @@
+/* Sidebar (AppRail): one 40×40 slot per item on one axis, on screen while the page scrolls. */
+.app-shell>.rail{position:sticky;top:0;z-index:30;flex:none;align-self:flex-start;display:flex;flex-direction:column;align-items:center;gap:0;width:64px;height:100vh;height:100dvh;padding:14px 0 12px;border-right:1px solid #26353a;background:rgba(16,25,31,.92)}
+.rail-slot{position:relative;display:grid;place-items:center;width:40px;height:40px}
+.rail-nav{display:grid;gap:6px;margin-top:18px}
+.rail-bottom{display:grid;gap:6px;margin-top:auto;padding-top:12px;border-top:1px solid #26353a}
+.rail .rail-button{position:relative;display:grid;place-items:center;width:40px;height:40px;padding:0;border:0;border-radius:12px;background:transparent;color:#839496;cursor:pointer;transition:background .15s ease,color .15s ease}
+.rail .rail-button:hover,.rail .rail-slot.open .rail-button{background:#1f3033;color:#d8ece4}
+.rail .rail-button.active{background:#243638;color:var(--mint)}
+.rail .rail-button.active::before{content:"";position:absolute;left:-12px;top:10px;bottom:10px;width:3px;border-radius:0 3px 3px 0;background:var(--mint)}
+.rail .rail-button:focus-visible,.rail-brand:focus-visible{outline:2px solid var(--mint);outline-offset:2px}
+.rail-brand{display:grid;place-items:center;width:40px;height:40px;padding:0;border:0;border-radius:12px;background:transparent;cursor:pointer;transition:filter .16s ease,transform .16s ease}
+.rail-brand svg{display:block}
+.rail-brand:hover{filter:brightness(1.08);transform:translateY(-1px)}
+.rail-dot{position:absolute;top:8px;right:8px;width:7px;height:7px;border-radius:50%;background:#e4b66b;box-shadow:0 0 0 2px #10191f}
+.rail-status-button.ok .rail-dot{background:var(--mint)}
+.rail-demo{position:absolute;bottom:3px;left:50%;transform:translateX(-50%);padding:0 3px;border-radius:3px;background:#1c3a2f;color:var(--mint);font-size:6.5px;font-weight:800;letter-spacing:.5px;line-height:9px}
+.rail-status-button:has(.rail-demo) svg{margin-top:-7px}
+.rail-language-button{font-size:11px;font-weight:750;letter-spacing:.4px}
+.rail-avatar{display:grid;place-items:center;width:32px;height:32px;border-radius:50%;background:#35464a;color:#d3dfdd;font-size:12px;font-weight:650}
+/* Tooltips beside the rail; hidden while a panel of that slot is open. */
+.rail-slot[data-tip]::after{content:attr(data-tip);position:absolute;left:calc(100% + 12px);top:50%;z-index:40;transform:translate(-4px,-50%);padding:5px 8px;border:1px solid #2f4543;border-radius:7px;background:#142126;color:#d6e3de;font-size:11px;white-space:nowrap;pointer-events:none;opacity:0;transition:opacity .12s ease,transform .12s ease}
+.rail-slot[data-tip]:hover::after,.rail-slot[data-tip]:has(:focus-visible)::after{opacity:1;transform:translate(0,-50%)}
+.rail-slot.open::after{display:none}
+.rail-panel{position:absolute;left:calc(100% + 12px);bottom:0;z-index:45;display:grid;gap:8px;width:max-content;min-width:200px;max-width:min(300px,calc(100vw - 80px));padding:11px;border:1px solid #2f4543;border-radius:11px;background:#142126;box-shadow:0 14px 34px rgba(0,0,0,.4)}
+.rail-panel-title{color:#7f948f;font-size:9px;font-weight:700;letter-spacing:.9px;text-transform:uppercase}
+.rail-facts{display:grid;gap:6px;margin:0}
+.rail-facts>div{display:grid;grid-template-columns:62px minmax(0,1fr);gap:8px;font-size:11px}
+.rail-facts dt{color:#7f948f}
+.rail-facts dd{display:flex;align-items:center;gap:6px;min-width:0;margin:0;color:#d6e3de;overflow-wrap:anywhere}
+.rail-facts code{color:#b7edcf;font-size:10px}
+.rail-facts .rail-dot{position:static;flex:none;box-shadow:none}
+.rail-facts dd.ok .rail-dot{background:var(--mint)}
+.rail-panel .data-text-button{justify-self:start}
+.rail-option{display:grid;grid-template-columns:28px minmax(0,1fr) 14px;align-items:center;gap:6px;width:100%;padding:6px 7px;border:0;border-radius:8px;background:transparent;color:#c9dad5;font-size:12px;text-align:left;cursor:pointer}
+.rail-option:hover,.rail-option:focus-visible{background:#1f3033;outline:none}
+.rail-option[aria-checked="true"]{color:var(--mint)}
+.rail-option-code{color:#7f948f;font-size:10px;font-weight:750}
+@media(max-width:560px){.app-shell>.rail{width:56px;padding:10px 0}.rail .rail-button.active::before{left:-8px}.rail-nav{margin-top:12px}}
+@media(max-height:520px){.rail-nav,.rail-bottom{gap:2px}.rail-nav{margin-top:8px}}
+

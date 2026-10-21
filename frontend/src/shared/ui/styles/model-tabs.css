@@ -1,0 +1,8 @@
+/* Model page: the improvement cycle is a card of the overview; the tabs are the page's one navigation. */
+.model-cycle-card{display:grid;gap:8px;margin-bottom:14px}
+.model-cycle-card .data-section-title{margin:0}
+.model-cycle-action{grid-column:1/-1;justify-self:start;align-self:end}
+.model-tabs>.data-tabs{position:sticky;top:0;z-index:6;display:grid;grid-template-columns:repeat(4,minmax(max-content,1fr));border-radius:13px 13px 0 0;background:#182a2e}
+.model-tabs>.data-tabs button{justify-content:center}
+.model-tabs>.data-tab-body[hidden]{display:none}
+

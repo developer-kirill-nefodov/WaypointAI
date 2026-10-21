@@ -1,4 +1,4 @@
-import type { AssistantStatus, ClientFrame, ServerFrame, SourceView } from "@waypoint-ai/shared";
+import type { AssistantStatus, ClientFrame, SourceView } from "@waypoint-ai/shared";
 
 export type ConnectionState = "connecting" | "connected" | "disconnected";
 export type Capabilities = { assistantStatus: AssistantStatus; modelLabel: string | null; demoMode: boolean; voiceInput?: boolean };

@@ -1,6 +1,5 @@
 import type { Citation, PlaceView, RecordView, SearchArea, SourceView, TripPlan } from "@waypoint-ai/shared";
 
-/** One line of the progress feed shown while a turn runs, kept on the answer it produced. */
 /**
  * One line of a turn's progress feed. startedAt is the client's clock when the step began (for the live timer);
  * durationMs is the server's measure once it ended; progress is the model call running inside it.
@@ -12,8 +11,8 @@ export type TurnStep = {
 };
 /** How a turn ended: an answer, a clarifying question, an error, a stop, or a lost connection. */
 export type MessageKind = "answer" | "clarification" | "error" | "cancelled" | "lost";
-/** What the answer put on the map, for its "on the map" line. */
 const MESSAGE_KINDS: MessageKind[] = ["answer", "clarification", "error", "cancelled", "lost"];
+/** What the answer put on the map, for its "on the map" line. */
 export type ResultSummary = { places: number; records: number; tripDays: number | null };
 export type Message = {
   role: "assistant" | "user"; text: string; durationMs?: number; choices?: Array<{ id: string; label: string }>; steps?: TurnStep[];

@@ -1,0 +1,28 @@
+/* Workspace identity and runtime controls live together in the footer. */
+.workspace{display:flex;flex-direction:column;min-height:100vh;padding-bottom:16px}
+.content-grid{height:max(550px,calc(100vh - 160px));min-height:0;flex:0 0 auto;grid-template-rows:minmax(0,1fr);padding-top:20px}
+.content-grid{margin-bottom:26px}
+
+
+.footer-brand-mark{display:grid;place-items:center;width:31px;height:31px;flex:0 0 31px;overflow:hidden;padding:0;border:1px solid #416857;border-radius:10px;background:transparent;color:var(--mint);font:800 11px Manrope,sans-serif;letter-spacing:-.6px}
+
+
+
+
+
+
+
+
+
+
+
+
+
+@media(max-width:900px){.content-grid{height:auto;min-height:0;grid-template-rows:none}.chat-panel{height:clamp(540px,80svh,760px)}}
+@media(max-width:560px){.workspace{padding-bottom:12px}.content-grid{margin-bottom:18px}}
+.composer-actions>.voice-button{border:1px solid #3a4d50;background:#1c2a30;color:#b7c5c2}.composer-actions>.voice-button:hover:not(:disabled){border-color:#547765;color:var(--mint)}.composer-actions>.voice-button.recording{border-color:#df9c74;background:#342721;color:#f0bea0;animation:voice-pulse 1.4s ease-in-out infinite}.voice-spinner{animation:voice-spin 1s linear infinite}.voice-status{color:#9fb0ad}.voice-status.recording{color:#f0bea0}.voice-status.issue{color:#e4b66b}@keyframes voice-pulse{0%,100%{box-shadow:0 0 0 0 #df9c7455}50%{box-shadow:0 0 0 5px #df9c7400}}@keyframes voice-spin{to{transform:rotate(360deg)}}@media(prefers-reduced-motion:reduce){.composer-actions>.voice-button.recording,.voice-spinner{animation:none}}
+@media(min-width:901px){.workspace.workspace-fill{height:100vh;height:100dvh;min-height:640px}.workspace-fill .content-grid{flex:1 1 0;height:auto;min-height:0;margin-bottom:16px}}
+/* Kept-alive pages are hidden, not unmounted; class display rules must not override [hidden]. */
+[hidden]{display:none!important}
+.page-keepalive{display:contents}
+

@@ -1,6 +1,6 @@
-import { lazy, Suspense, useCallback, useEffect, useRef, useState, type FormEvent, type KeyboardEvent as ReactKeyboardEvent } from "react";
-import { Activity, ArrowUp, ArrowUpRight, ChevronDown, Clock3, Database, Layers3, MapPin, MessageSquare, MoreHorizontal, Plus, RefreshCw, SlidersHorizontal, Sparkles, Square, Trash2 } from "lucide-react";
-import type { Citation, PlaceView, RecordView, Scope, ServerFrame, SourceView, TripPlan, SearchArea } from "@waypoint-ai/shared";
+import { lazy, Suspense, useCallback, useEffect, useRef, useState } from "react";
+import { Activity, MapPin, MessageSquare } from "lucide-react";
+import type { Citation, PlaceView, RecordView, Scope, SourceView, TripPlan, SearchArea } from "@waypoint-ai/shared";
 import MapPanel, { type MapLayers } from "../../widgets/map/MapPanel";
 import { EMPTY_SCENE, type MapScene } from "../../widgets/map/map-scene";
 import { useCachedQuery } from "../../shared/data-cache";
@@ -8,88 +8,44 @@ import { eventQueryParams, searchEvents } from "../../shared/api/investigations"
 import { clearAssistantHistory, loadCapabilities, loadDataSources, type Capabilities, type ConnectionState } from "../../shared/api/client";
 import { createAssistantConnection, type AssistantConnection, type ReconnectInfo } from "../../shared/api/assistantSocket";
 import { readLanguage, saveLanguage, translate, type Language } from "../../shared/i18n";
-import HomeDashboard from "./HomeDashboard";
+import { pageTitle } from "../../shared/routing";
 import AppRail from "../../shared/ui/AppRail";
-import { pageFromPath, pageTitle, pathForPage, rememberPageSearch, type AppPage } from "../../shared/routing";
+import { usePopoverDismiss } from "../../shared/ui/usePopoverDismiss";
 import MicButton, { voiceStatusText } from "../voice/MicButton";
 import { isVoiceFrame, useVoiceInput } from "../voice/useVoiceInput";
-import { compactResult, lastUserMessage, readSavedConversation, writeSavedConversation, type ChatResult, type Message, type SavedChat, type TurnStep } from "./chat-storage";
-import { AnswerCard, LiveTurnCard, UserBubble } from "./ChatCards";
-import CitationList from "./CitationList";
 import { AnswerFeedback } from "../training/JournalTab";
 import ImportLayer from "../imports/ImportLayer";
 import { importStore } from "../imports/import-store";
+import HomeDashboard from "./HomeDashboard";
+import { compactResult, lastUserMessage, readSavedConversation, writeSavedConversation, type ChatResult, type Message, type SavedChat, type TurnStep } from "./chat-storage";
+import { connectionLabel, conversationTitle, elapsedSince, endStreaming, formatAppliedFilters, invalidDateRange, joinDraft, localDateBoundary, welcomeMessage } from "./chat-utils";
+import { applyProgressFrame, applyStepFrame, finishSteps } from "./turn-steps";
+import { useAppNavigation } from "./useAppNavigation";
+import { useChatScroll } from "./useChatScroll";
+import { ChatComposer, ChatFilters, ChatHeader, SuggestionsPanel } from "./ChatControls";
+import { AnswerCard, LiveTurnCard, UserBubble } from "./ChatCards";
+import CitationList from "./CitationList";
 import { contextSuggestions, rotateSuggestions, starterSuggestions } from "./suggestions";
 
-const MESSAGE_ANCHOR_OFFSET_PX = 16;
 const MarkdownMessage = lazy(() => import("./MarkdownMessage"));
-// The events and places modes of the map page load on first use, so they do not grow the initial bundle.
+// The events and places modes of the map page and the other pages load on first use, so they do not grow the
+// initial bundle.
 const EventsPanel = lazy(() => import("../investigation/EventsPanel"));
 const PlacesPanel = lazy(() => import("../map/PlacesPanel"));
-
-type MapMode = "assistant" | "events" | "places";
-
-/** The map page's mode from the address: `/map?mode=events`; the former `/investigation` page opens the events mode. */
-function readMapMode(): MapMode {
-  if (window.location.pathname.replace(/\/+$/, "") === "/investigation") return "events";
-  if (window.location.pathname.replace(/\/+$/, "") !== "/map") return "assistant";
-  const mode = new URLSearchParams(window.location.search).get("mode");
-  return mode === "events" || mode === "places" ? mode : "assistant";
-}
 const DataPage = lazy(() => import("../data/DataPage"));
 const ModelPage = lazy(() => import("../training/ModelPage"));
 
-function welcomeMessage(language: Language): Message {
-  return { role: "assistant", text: translate(language, "Привет! Я локальный помощник для поиска и изучения геоданных. Опишите, что хотите найти.", "Hi! I’m your local assistant for exploring geospatial data. Tell me what you’d like to find.") };
-}
+/** The question offered for a place or event handed to the assistant. */
+const askQuestion = (language: Language, kind: "place" | "record") => kind === "record"
+  ? translate(language, "Были ли ещё землетрясения в радиусе 30 км от выбранной точки на карте за последние 30 дней?", "Were there other earthquakes within 30 km of the selected map point in the last 30 days?")
+  : translate(language, "Были ли землетрясения в радиусе 50 км от выбранной точки на карте за последние 30 дней?", "Were there earthquakes within 50 km of the selected map point in the last 30 days?");
 
 export default function AssistantWorkspace() {
   const [language, setLanguage] = useState<Language>(readLanguage);
-  const [activePage, setActivePageState] = useState<AppPage>(() => pageFromPath(window.location.pathname));
-  // Map pages stay mounted after their first visit so Leaflet, filters, and results are not rebuilt on every switch.
-  const [visitedPages, setVisitedPages] = useState<Set<AppPage>>(() => new Set([activePage]));
-  const showPage = useCallback((page: AppPage) => {
-    setActivePageState(page);
-    setVisitedPages((current) => current.has(page) ? current : new Set([...current, page]));
-  }, []);
-  const setActivePage = useCallback((page: AppPage) => {
-    const path = pathForPage(page);
-    if (`${window.location.pathname}${window.location.search}` !== path) window.history.pushState({ page }, "", path);
-    showPage(page);
-  }, [showPage]);
-  const [mapMode, setMapModeState] = useState<MapMode>(readMapMode);
-  const [visitedModes, setVisitedModes] = useState<Set<MapMode>>(() => new Set([readMapMode()]));
-  const setMapMode = useCallback((mode: MapMode) => {
-    setMapModeState(mode);
-    setVisitedModes((current) => current.has(mode) ? current : new Set([...current, mode]));
-    const search = mode === "assistant" ? "" : `?mode=${mode}`;
-    rememberPageSearch("workspace", search);
-    if (window.location.pathname === "/map" && window.location.search !== search) window.history.pushState({ page: "workspace" }, "", `/map${search}`);
-  }, []);
-  useEffect(() => {
-    // The former event explorer address becomes the map's events mode.
-    const mode = readMapMode();
-    if (mode !== "assistant") rememberPageSearch("workspace", `?mode=${mode}`);
-    if (window.location.pathname.replace(/\/+$/, "") === "/investigation") window.history.replaceState({ page: "workspace" }, "", "/map?mode=events");
-  }, []);
-  useEffect(() => {
-    const onPopState = () => {
-      const page = pageFromPath(window.location.pathname);
-      showPage(page);
-      if (page === "workspace") {
-        const mode = readMapMode();
-        setMapModeState(mode);
-        setVisitedModes((current) => current.has(mode) ? current : new Set([...current, mode]));
-      }
-    };
-    window.addEventListener("popstate", onPopState);
-    return () => window.removeEventListener("popstate", onPopState);
-  }, [showPage]);
+  const { activePage, visitedPages, setActivePage, mapMode, visitedModes, setMapMode } = useAppNavigation();
   const [savedConversation] = useState(() => readSavedConversation(welcomeMessage(language)));
   const socketRef = useRef<WebSocket | null>(null);
   const requestStartedAtRef = useRef<number | null>(null);
-  const messagesRef = useRef<HTMLDivElement | null>(null);
-  const followLatestMessageRef = useRef(true);
   const sourcesRef = useRef<SourceView[]>([]);
   const [capabilities, setCapabilities] = useState<Capabilities | null>(null);
   const [connection, setConnection] = useState<ConnectionState>("connecting");
@@ -152,6 +108,8 @@ export default function AssistantWorkspace() {
   const [suggestionOffset, setSuggestionOffset] = useState(0);
   const [filtersExpanded, setFiltersExpanded] = useState(false);
   const [suggestionsExpanded, setSuggestionsExpanded] = useState(false);
+  const chatScroll = useChatScroll({ visible: activePage === "workspace" && mapMode === "assistant", chatId: localChatId, changes: [messages, pending, progressLabel] });
+  usePopoverDismiss();
 
   useEffect(() => {
     setSourcesLoading(true);
@@ -168,62 +126,74 @@ export default function AssistantWorkspace() {
   }, [metadataVersion]);
 
   useEffect(() => {
+    const setSteps = (steps: TurnStep[]) => {
+      turnStepsRef.current = steps;
+      setTurnSteps(steps);
+    };
+    /** Ends the running turn on the client: how long it took and the steps to keep on its message. */
+    const endTurn = () => {
+      const durationMs = elapsedSince(requestStartedAtRef.current);
+      requestStartedAtRef.current = null;
+      setPending(false);
+      setActiveRequestId(null);
+      setProgressLabel(null);
+      setTurnStartedAt(null);
+      const steps = finishSteps(turnStepsRef.current);
+      setSteps([]);
+      return { durationMs, steps };
+    };
     const connection = createAssistantConnection({
       onFrame: (frame) => {
-          if (isVoiceFrame(frame)) {
-            voiceFrameHandlerRef.current(frame);
-            return;
-          }
-          if (frame.type === "session.ready") setCapabilities({ assistantStatus: frame.assistantStatus, modelLabel: frame.modelLabel, demoMode: frame.demoMode, voiceInput: frame.voiceInput });
-          if (frame.type === "import.progress") importStore.upsert(frame.job, true);
-          if (frame.type === "turn.status") setProgressLabel(frame.label);
-          if (frame.type === "turn.step") {
-            const current = turnStepsRef.current;
-            const previous = current.find((item) => item.id === frame.stepId);
-            const startedAt = previous?.startedAt ?? Date.now();
-            const step: TurnStep = {
-              id: frame.stepId, label: frame.label, state: frame.state, startedAt,
-              ...(frame.detail ? { detail: frame.detail } : {}),
-              ...(frame.state === "running" ? (previous?.progress ? { progress: previous.progress } : {}) : { durationMs: frame.durationMs ?? Date.now() - startedAt }),
-            };
-            turnStepsRef.current = previous ? current.map((item) => item.id === step.id ? step : item) : [...current, step];
-            setTurnSteps(turnStepsRef.current);
-          }
-          if (frame.type === "turn.progress") {
-            const progress = { phase: frame.phase, tokens: frame.tokens, ...(frame.tokensPerSecond ? { tokensPerSecond: frame.tokensPerSecond } : {}) };
-            turnStepsRef.current = turnStepsRef.current.map((item) => item.id === frame.stepId && item.state === "running" ? { ...item, progress } : item);
-            setTurnSteps(turnStepsRef.current);
-          }
-          if (frame.type === "tool.started") setProgressLabel(frame.label);
-          if (frame.type === "turn.accepted") setConversationId(frame.conversationId);
-          if (frame.type === "turn.error") {
-            const durationMs = elapsedSince(requestStartedAtRef.current);
-            requestStartedAtRef.current = null;
-            setPending(false);
-            setActiveRequestId(null);
-            setProgressLabel(null);
-            const steps = finishedSteps();
-            setTurnStartedAt(null);
+        if (isVoiceFrame(frame)) {
+          voiceFrameHandlerRef.current(frame);
+          return;
+        }
+        switch (frame.type) {
+          case "session.ready":
+            setCapabilities({ assistantStatus: frame.assistantStatus, modelLabel: frame.modelLabel, demoMode: frame.demoMode, voiceInput: frame.voiceInput });
+            break;
+          case "import.progress":
+            importStore.upsert(frame.job, true);
+            break;
+          case "turn.status":
+          case "tool.started":
+            setProgressLabel(frame.label);
+            break;
+          case "turn.step":
+            setSteps(applyStepFrame(turnStepsRef.current, frame));
+            break;
+          case "turn.progress":
+            setSteps(applyProgressFrame(turnStepsRef.current, frame));
+            break;
+          case "turn.accepted":
+            setConversationId(frame.conversationId);
+            break;
+          case "assistant.delta":
+            setMessages((current) => {
+              const last = current.at(-1);
+              if (last?.streaming) return [...current.slice(0, -1), { ...last, text: last.text + frame.text }];
+              return [...current, { role: "assistant", text: frame.text, streaming: true }];
+            });
+            break;
+          case "turn.error": {
+            const { durationMs, steps } = endTurn();
             setMessages((current) => [...endStreaming(current), { role: "assistant", kind: "error", text: frame.message, durationMs, steps, at: Date.now(), ...(frame.retryable ? { query: submittedQueryRef.current } : {}) }]);
+            break;
           }
-          if (frame.type === "turn.clarification") {
-            const durationMs = elapsedSince(requestStartedAtRef.current);
-            requestStartedAtRef.current = null;
+          case "turn.clarification": {
+            const { durationMs, steps } = endTurn();
             setConversationId(frame.conversationId);
-            setPending(false);
-            setActiveRequestId(null);
-            setProgressLabel(null);
-            const steps = finishedSteps();
-            setTurnStartedAt(null);
             setMessages((current) => [...endStreaming(current), { role: "assistant", kind: "clarification", text: frame.message, choices: frame.choices, durationMs, steps, at: Date.now() }]);
+            break;
           }
-          if (frame.type === "turn.completed") {
-            const durationMs = elapsedSince(requestStartedAtRef.current);
-            requestStartedAtRef.current = null;
+          case "turn.cancelled": {
+            const { durationMs, steps } = endTurn();
+            setMessages((current) => [...endStreaming(current), { role: "assistant", kind: "cancelled", text: translate(readLanguage(), "Запрос остановлен.", "Request stopped."), durationMs, steps, at: Date.now(), query: submittedQueryRef.current }]);
+            break;
+          }
+          case "turn.completed": {
+            const { durationMs, steps } = endTurn();
             setConversationId(frame.conversationId);
-            setPending(false);
-            setActiveRequestId(null);
-            setProgressLabel(null);
             setMapPlaces(frame.result.places ?? []);
             setMapRecords(frame.result.records);
             setResultQuery(submittedQueryRef.current);
@@ -234,9 +204,6 @@ export default function AssistantWorkspace() {
             setAppliedFilters(frame.appliedFilters);
             setResultSources(frame.sources);
             setSuggestionOffset(0);
-            // The streamed text is replaced by the final message, which is the authoritative version.
-            const steps = finishedSteps();
-            setTurnStartedAt(null);
             const result = { places: frame.result.places?.length ?? 0, records: frame.result.records.length, tripDays: frame.result.tripPlan?.totalDays ?? null };
             const reply: Message = {
               role: "assistant", kind: "answer", text: frame.assistantMessage, durationMs, steps, requestId: frame.requestId, at: Date.now(),
@@ -244,24 +211,11 @@ export default function AssistantWorkspace() {
               ...(result.places || result.records || result.tripDays ? { result } : {}),
               ...(frame.citations?.length ? { citations: frame.citations, citationsMode: frame.citationsMode ?? "cited" } : {}),
             };
+            // The streamed text is replaced by the final message, which is the authoritative version.
             setMessages((current) => current.at(-1)?.streaming ? [...current.slice(0, -1), reply] : [...current, reply]);
+            break;
           }
-          if (frame.type === "turn.cancelled") {
-            const durationMs = elapsedSince(requestStartedAtRef.current);
-            requestStartedAtRef.current = null;
-            setPending(false);
-            setActiveRequestId(null);
-            setProgressLabel(null);
-            const activeLanguage = readLanguage();
-            const steps = finishedSteps();
-            setTurnStartedAt(null);
-            setMessages((current) => [...endStreaming(current), { role: "assistant", kind: "cancelled", text: translate(activeLanguage, "Запрос остановлен.", "Request stopped."), durationMs, steps, at: Date.now(), query: submittedQueryRef.current }]);
-          }
-          if (frame.type === "assistant.delta") setMessages((current) => {
-            const last = current.at(-1);
-            if (last?.streaming) return [...current.slice(0, -1), { ...last, text: last.text + frame.text }];
-            return [...current, { role: "assistant", text: frame.text, streaming: true }];
-          });
+        }
       },
       onState: (state, reconnect) => {
         setConnection(state);
@@ -278,23 +232,10 @@ export default function AssistantWorkspace() {
         socketRef.current = null;
         // A turn that was running is lost with the connection; it is not resent automatically.
         if (requestStartedAtRef.current !== null) {
-          const durationMs = elapsedSince(requestStartedAtRef.current);
-          requestStartedAtRef.current = null;
-          const activeLanguage = readLanguage();
-          const steps = finishedSteps();
-          setTurnStartedAt(null);
+          const { durationMs, steps } = endTurn();
           setMessages((current) => [...endStreaming(current), {
-            role: "assistant",
-            kind: "lost",
-            at: Date.now(),
-            query: submittedQueryRef.current,
-            steps,
-            text: translate(
-              activeLanguage,
-              "Соединение с сервером прервалось, запрос не завершён. Отправьте его ещё раз после переподключения.",
-              "The connection to the server was lost before the request finished. Send it again once reconnected.",
-            ),
-            durationMs,
+            role: "assistant", kind: "lost", at: Date.now(), query: submittedQueryRef.current, steps, durationMs,
+            text: translate(readLanguage(), "Соединение с сервером прервалось, запрос не завершён. Отправьте его ещё раз после переподключения.", "The connection to the server was lost before the request finished. Send it again once reconnected."),
           }]);
         }
         setPending(false);
@@ -332,17 +273,13 @@ export default function AssistantWorkspace() {
     if (!item) return;
     setPinned((current) => ({ place, record, revision: (current?.revision ?? 0) + 1 }));
     setSelectedResultKey(`${place ? "place" : "record"}:${item.id}`);
-    setDraft(record
-      ? translate(language, "Были ли ещё землетрясения в радиусе 30 км от выбранной точки на карте за последние 30 дней?", "Were there other earthquakes within 30 km of the selected map point in the last 30 days?")
-      : translate(language, "Были ли землетрясения в радиусе 50 км от выбранной точки на карте за последние 30 дней?", "Were there earthquakes within 50 km of the selected map point in the last 30 days?"));
+    setDraft(askQuestion(language, record ? "record" : "place"));
     setMapMode("assistant");
     window.setTimeout(() => composerRef.current?.focus(), 0);
   }, [language, setMapMode]);
   /** The assistant map's own selection: only the question is offered. */
   const askAboutSelection = useCallback((item: { kind: "place" | "record"; id: string; name: string }) => {
-    setDraft(item.kind === "record"
-      ? translate(language, "Были ли ещё землетрясения в радиусе 30 км от выбранной точки на карте за последние 30 дней?", "Were there other earthquakes within 30 km of the selected map point in the last 30 days?")
-      : translate(language, "Были ли землетрясения в радиусе 50 км от выбранной точки на карте за последние 30 дней?", "Were there earthquakes within 50 km of the selected map point in the last 30 days?"));
+    setDraft(askQuestion(language, item.kind));
     window.setTimeout(() => composerRef.current?.focus(), 0);
   }, [language]);
   useEffect(() => {
@@ -365,28 +302,6 @@ export default function AssistantWorkspace() {
     saveLanguage(language);
   }, [language]);
 
-  useEffect(() => {
-    const closePopovers = (event: PointerEvent) => {
-      const target = event.target;
-      if (!(target instanceof Node)) return;
-      document.querySelectorAll<HTMLDetailsElement>("details[open]").forEach((popover) => {
-        if (!popover.contains(target)) popover.open = false;
-      });
-    };
-    const closeOnEscape = (event: KeyboardEvent) => {
-      if (event.key !== "Escape") return;
-      const openPopovers = [...document.querySelectorAll<HTMLDetailsElement>("details[open]")];
-      openPopovers.forEach((popover) => { popover.open = false; });
-      openPopovers.at(-1)?.querySelector<HTMLElement>("summary")?.focus();
-    };
-    document.addEventListener("pointerdown", closePopovers);
-    document.addEventListener("keydown", closeOnEscape);
-    return () => {
-      document.removeEventListener("pointerdown", closePopovers);
-      document.removeEventListener("keydown", closeOnEscape);
-    };
-  }, []);
-
   // The result of the last completed turn travels with the chat, so a reload or a reopened chat shows it again.
   const currentResult: ChatResult | null = resultsLoaded
     ? compactResult({ places: mapPlaces, records: mapRecords, tripPlan, searchArea, appliedFilters, sources: resultSources })
@@ -398,55 +313,6 @@ export default function AssistantWorkspace() {
     const saved = writeSavedConversation({ id: localChatId, conversationId, messages, savedAt: Date.now(), result: currentResultRef.current, recentChats });
     if (!saved) setHistoryClearWarning(translate(language, "Не удалось сохранить переписку в браузере.", "Could not save the conversation in this browser."));
   }, [conversationId, localChatId, messages, recentChats, language, resultsLoaded, mapPlaces, mapRecords, tripPlan, searchArea]);
-
-  const scrollToLatestMessage = useCallback(() => {
-    const viewport = messagesRef.current;
-    if (!viewport) return;
-    const maxScrollTop = viewport.scrollHeight - viewport.clientHeight;
-    const latestMessage = viewport.querySelector<HTMLElement>("article.message:last-of-type");
-    // Keep the start of a long assistant answer visible instead of jumping past it to the end.
-    if (latestMessage?.classList.contains("assistant")) {
-      viewport.scrollTop = Math.min(latestMessage.offsetTop - MESSAGE_ANCHOR_OFFSET_PX, maxScrollTop);
-      return;
-    }
-    viewport.scrollTop = maxScrollTop;
-  }, []);
-  useEffect(() => {
-    if (followLatestMessageRef.current) scrollToLatestMessage();
-  }, [messages, pending, progressLabel, scrollToLatestMessage]);
-  // When the chat is shown, its answers render lazily and keep growing for a moment: stay on the latest one until
-  // they settle or the user scrolls.
-  const chatVisible = activePage === "workspace" && mapMode === "assistant";
-  useEffect(() => {
-    const viewport = messagesRef.current;
-    if (!chatVisible || !viewport) return;
-    let settling = true;
-    const stop = () => { settling = false; };
-    const observer = new ResizeObserver(() => { if (settling) scrollToLatestMessage(); });
-    observer.observe(viewport);
-    viewport.querySelectorAll("article.message").forEach((message) => observer.observe(message));
-    scrollToLatestMessage();
-    const timer = window.setTimeout(stop, 1500);
-    for (const type of ["wheel", "touchstart", "keydown", "pointerdown"]) viewport.addEventListener(type, stop, { passive: true });
-    return () => {
-      observer.disconnect();
-      window.clearTimeout(timer);
-      for (const type of ["wheel", "touchstart", "keydown", "pointerdown"]) viewport.removeEventListener(type, stop);
-    };
-  }, [chatVisible, localChatId, scrollToLatestMessage]);
-
-  /** The steps of the turn that just ended; a step still running when the turn ends is shown as not finished. */
-  function finishedSteps(): TurnStep[] | undefined {
-    const steps = turnStepsRef.current.map((step) => step.state === "running" ? { ...step, state: "failed" as const } : step);
-    turnStepsRef.current = [];
-    setTurnSteps([]);
-    return steps.length ? steps : undefined;
-  }
-
-  function submit(event: FormEvent<HTMLFormElement>) {
-    event.preventDefault();
-    if (send(draft.trim())) setDraft("");
-  }
 
   /** Sends a message as the next turn; false when it cannot be sent now. */
   function send(message: string): boolean {
@@ -474,8 +340,7 @@ export default function AssistantWorkspace() {
       ...(fromDate ? { from: localDateBoundary(fromDate, false) } : {}),
       ...(toDate ? { to: localDateBoundary(toDate, true) } : {}),
     } : null;
-    // Sending a message always brings the conversation back into follow mode.
-    followLatestMessageRef.current = true;
+    chatScroll.follow();
     setMessages((current) => [...current, { role: "user", text: message, at: Date.now() }]);
     socketRef.current.send(JSON.stringify({
       protocolVersion: 1,
@@ -486,13 +351,6 @@ export default function AssistantWorkspace() {
       scope: { workspaceId: "demo", sourceIds: selectedSourceIds, polygonIds: [], dateRange, language, ...(selectedMapItem ? { selectedMapItem } : {}) },
     }));
     return true;
-  }
-
-  function handleComposerKeyDown(event: ReactKeyboardEvent<HTMLTextAreaElement>) {
-    if (event.key === "Enter" && !event.shiftKey && !event.nativeEvent.isComposing) {
-      event.preventDefault();
-      event.currentTarget.form?.requestSubmit();
-    }
   }
 
   function updateDraft(value: string) {
@@ -514,8 +372,6 @@ export default function AssistantWorkspace() {
   const activeSuggestions = lastSubmittedQuery
     ? contextSuggestions({ query: lastSubmittedQuery, places: mapPlaces, records: mapRecords, tripPlan, searchArea }, language)
     : starterSuggestions(language, localChatId);
-  const visibleSuggestions = rotateSuggestions(activeSuggestions, suggestionOffset);
-  const activeFilterCount = Number(selectedSourceIds.length > 0) + Number(Boolean(fromDate || toDate));
 
   function cancelRequest() {
     const requestId = activeRequestId;
@@ -536,18 +392,23 @@ export default function AssistantWorkspace() {
     setSelectedResultKey(null);
   }
 
-  function startNewConversation() {
-    if (pending) return;
-    followLatestMessageRef.current = true;
-    archiveCurrentConversation();
-    setLocalChatId(crypto.randomUUID());
-    setConversationId(null);
+  /** Clears the chat, the composer, and the map for a fresh conversation. */
+  function resetConversation() {
     setMessages([welcomeMessage(language)]);
     setDraft("");
     setSuggestionsExpanded(false);
     showResult(null);
     setLastSubmittedQuery("");
     setSuggestionOffset(0);
+  }
+
+  function startNewConversation() {
+    if (pending) return;
+    chatScroll.follow();
+    archiveCurrentConversation();
+    setLocalChatId(crypto.randomUUID());
+    setConversationId(null);
+    resetConversation();
   }
 
   function archiveCurrentConversation() {
@@ -568,7 +429,7 @@ export default function AssistantWorkspace() {
     if (pending) return;
     const selected = recentChats.find((chat) => chat.id === id);
     if (!selected) return;
-    followLatestMessageRef.current = true;
+    chatScroll.follow();
     archiveCurrentConversation();
     setRecentChats((current) => current.filter((chat) => chat.id !== id));
     setLocalChatId(selected.id);
@@ -585,18 +446,13 @@ export default function AssistantWorkspace() {
   async function resetHistory() {
     if (pending || historyResetPending) return;
     if (!window.confirm(translate(language, "Удалить всю сохранённую историю чатов в браузере и на сервере? Это действие нельзя отменить.", "Delete all saved chat history from this browser and the server? This cannot be undone."))) return;
-    followLatestMessageRef.current = true;
+    chatScroll.follow();
     setHistoryResetPending(true);
     setHistoryClearWarning(null);
     setConversationId(null);
     setLocalChatId(crypto.randomUUID());
     setRecentChats([]);
-    setMessages([welcomeMessage(language)]);
-    setDraft("");
-    setSuggestionsExpanded(false);
-    showResult(null);
-    setLastSubmittedQuery("");
-    setSuggestionOffset(0);
+    resetConversation();
     try {
       await clearAssistantHistory();
     } catch {
@@ -611,13 +467,7 @@ export default function AssistantWorkspace() {
   const voiceStatus = voiceStatusText(language, voice.state, voice.issue);
   const statusText = status === "ready" ? translate(language, "Модель готова", "Model ready") : status === "data_unavailable" ? translate(language, "База недоступна", "Database unavailable") : status === "model_unavailable" ? translate(language, "Модель не подключена", "Model unavailable") : translate(language, "AI-обработчик не подключён", "AI service starting");
   const dateRangeInvalid = invalidDateRange(fromDate, toDate);
-
-  function updateMessageScrollPosition() {
-    const viewport = messagesRef.current;
-    if (!viewport) return;
-    const remaining = viewport.scrollHeight - viewport.clientHeight - viewport.scrollTop;
-    followLatestMessageRef.current = remaining <= 48;
-  }
+  const conversationName = conversationTitle(messages, language);
 
   const streamingText = pending && messages.at(-1)?.streaming ? messages.at(-1)!.text : "";
   // Only the latest result is on the map, so only its answer offers to show it there.
@@ -659,113 +509,69 @@ export default function AssistantWorkspace() {
               ] as const).map(([mode, icon, label]) => <button key={mode} type="button" role="tab" aria-selected={mapMode === mode} className={mapMode === mode ? "active" : ""} onClick={() => setMapMode(mode)}>{icon}{label}</button>)}
             </div>
             <div className="map-mode-pane chat-pane" hidden={mapMode !== "assistant"}>
-            <div className="panel-heading chat-heading">
-              <div className="chat-heading-title"><span className="eyebrow">{t("ЛОКАЛЬНЫЙ ПОМОЩНИК", "LOCAL ASSISTANT")}</span><h2 title={conversationTitle(messages, language)}>{conversationTitle(messages, language)}</h2></div>
-              <div className="panel-heading-actions">
-                <button type="button" className="new-chat-button" disabled={pending || historyResetPending} onClick={startNewConversation}><Plus size={15} /><span>{t("Новый чат", "New chat")}</span></button>
-                <details className="chat-options">
-                  <summary className="icon-button" aria-label={t("Опции чата", "Chat options")} title={t("История и настройки", "History and settings")}><MoreHorizontal size={18} /></summary>
-                  <div className="chat-options-menu">
-                    <div className="chat-options-heading"><Clock3 size={14} /><span>{t("Недавние чаты", "Recent chats")}</span><small>{recentChats.length}</small></div>
-                    {recentChats.length ? <div className="recent-chat-list">
-                      {recentChats.map((chat) => <button key={chat.id} type="button" className="recent-chat-item" onClick={(event) => { openRecentChat(chat.id); event.currentTarget.closest("details")?.removeAttribute("open"); }}>
-                        <span>{conversationTitle(chat.messages, language)}</span><small>{formatChatDate(chat.savedAt, language)}</small>
-                      </button>)}
-                    </div> : <p className="chat-options-empty">{t("Новый чат сохраняет предыдущий здесь, чтобы вы могли к нему вернуться.", "Starting a new chat keeps the previous one here so you can return to it.")}</p>}
-                    {resultSources.length > 0 && <section className="chat-options-sources" aria-label={t("Источники последнего ответа", "Sources for the latest answer")}>
-                      <div className="chat-options-heading"><Layers3 size={14} /><span>{t("Источники последнего ответа", "Sources for the latest answer")}</span><small>{resultSources.length}</small></div>
-                      <div className="chat-option-source-list">{resultSources.map((source) => <div key={source.id} className="chat-option-source">
-                        <strong>{source.label}</strong>
-                        <span>{[source.license, source.snapshotDate ? `${t("снимок", "snapshot")} ${source.snapshotDate}` : null].filter(Boolean).join(" · ") || source.mode}</span>
-                      </div>)}</div>
-                    </section>}
-                    <p className="chat-history-note">{t("Хранится в этом браузере до 30 дней.", "Stored in this browser for up to 30 days.")}</p>
-                    <button type="button" className="clear-history-option" disabled={pending || historyResetPending} onClick={(event) => { void resetHistory(); event.currentTarget.closest("details")?.removeAttribute("open"); }}><Trash2 size={14} /><span>{t("Удалить всю историю", "Delete all history")}</span></button>
-                  </div>
-                </details>
-              </div>
-            </div>
-            <button type="button" className="section-toggle filters-toggle" aria-expanded={filtersExpanded} aria-controls="chat-filters" onClick={() => setFiltersExpanded((open) => !open)}><SlidersHorizontal size={15} /><span>{t("Фильтры", "Filters")}</span><small>{activeFilterCount ? `${activeFilterCount} ${t("активных", "active")}` : t("Источники и период", "Sources and date range")}</small><ChevronDown size={15} className="section-chevron" /></button>
-            <div id="chat-filters" className={`inline-disclosure${filtersExpanded ? " is-open" : ""}`} aria-hidden={!filtersExpanded} inert={!filtersExpanded}>
-              <div className="inline-disclosure-inner"><div className="scope-controls" aria-label={t("Фильтры запроса", "Query filters")}>
-                <details className="source-filter">
-                  <summary><span>{t("Источники", "Sources")}</span><strong>{selectedSourceIds.length ? `${t("Выбрано", "Selected")}: ${selectedSourceIds.length}` : t("Все", "All")}</strong></summary>
-                  <div className="source-filter-menu">
-                    {sources.map((source) => <label key={source.id} className="source-option">
-                      <input type="checkbox" checked={selectedSourceIds.includes(source.id)} disabled={!selectedSourceIds.includes(source.id) && selectedSourceIds.length >= 20} onChange={(event) => setSelectedSourceIds((current) => event.target.checked ? [...current, source.id] : current.filter((id) => id !== source.id))} />
-                      <span><strong>{source.label}</strong><small>{source.mode === "public_snapshot" ? t("Публичный снимок", "Public snapshot") : source.mode === "synthetic_local" ? t("Синтетические демо-данные", "Synthetic demo data") : source.mode}</small></span>
-                    </label>)}
-                    {!sources.length && <p className="source-empty">{sourceLoadFailed ? t("Не удалось загрузить источники", "Could not load sources") : capabilities?.assistantStatus === "data_unavailable" ? t("База данных пока недоступна", "Database is not available yet") : t("Источников пока нет", "No sources available")}</p>}
-                    {selectedSourceIds.length > 0 && <button type="button" className="clear-sources" onClick={() => setSelectedSourceIds([])}>{t("Сбросить выбор · использовать все", "Clear selection · use all sources")}</button>}
-                  </div>
-                </details>
-                <div className="date-filter">
-                  <label>{t("С", "From")} <input type="date" value={fromDate} max={toDate || undefined} onChange={(event) => setFromDate(event.target.value)} /></label>
-                  <label>{t("По", "To")} <input type="date" value={toDate} min={fromDate || undefined} onChange={(event) => setToDate(event.target.value)} /></label>
-                </div>
-                {dateRangeInvalid && <p className="filter-error" role="alert">{t("Начало периода должно быть раньше окончания.", "The start date must be before the end date.")}</p>}
-              </div></div>
-            </div>
-            <div className="messages-scroll-frame">
-              <div className="messages" ref={messagesRef} onScroll={updateMessageScrollPosition} tabIndex={0} aria-label={t("Сообщения чата", "Chat messages")}>
-                {messages.map((message, index) => {
-                  // The text of the running turn is shown in its live card until the answer replaces it.
-                  if (pending && message.streaming && index === messages.length - 1) return null;
-                  if (message.role === "user") return <UserBubble key={`${index}-user`} message={message} language={language} />;
-                  return <AnswerCard
-                    key={`${index}-assistant`}
-                    message={message}
-                    language={language}
-                    body={<Suspense fallback={<p>{message.text}</p>}><MarkdownMessage text={message.text} citations={message.citations} onCite={showCitation} /></Suspense>}
-                    sources={message.citations?.length ? <CitationList citations={message.citations} mode={message.citationsMode} language={language} sourceLabels={sourceLabels} isOnMap={citationOnMap} onShow={showCitation} /> : undefined}
-                    feedback={message.requestId ? <AnswerFeedback key={message.requestId} language={language} requestId={message.requestId} /> : undefined}
-                    pending={pending}
-                    onShowOnMap={index === lastResultIndex && resultsLoaded ? () => setResetViewportRevision((revision) => revision + 1) : undefined}
-                    onChoice={(label) => { setDraft(label); composerRef.current?.focus(); }}
-                    onRetry={(query) => { send(query); }}
-                  />;
-                })}
-                {pending && turnStartedAt !== null && <LiveTurnCard steps={turnSteps} startedAt={turnStartedAt} label={progressLabel ?? t("Думаю", "Thinking")} text={streamingText} language={language} body={<Suspense fallback={<p>{streamingText}</p>}><MarkdownMessage text={streamingText} /></Suspense>} />}
-              </div>
-              <div className="chat-edge-fade chat-edge-fade-top" aria-hidden="true" />
-              <div className="chat-edge-fade chat-edge-fade-bottom" aria-hidden="true" />
-            </div>
-            {historyClearWarning && <div className="history-warning" role="status">{historyClearWarning}</div>}
-            {appliedFilters.length > 0 && <div className="applied-filters" aria-label={t("Применённые сервером фильтры", "Filters applied by the server")}>{formatAppliedFilters(appliedFilters, sourcesRef.current, language).map((filter) => <span key={filter}>{filter}</span>)}</div>}
-            <div className="suggestions-panel">
-              <div className="suggestions-heading">
-                <button type="button" className="section-toggle suggestions-toggle" aria-expanded={suggestionsExpanded} aria-controls="suggested-requests" onClick={() => setSuggestionsExpanded((open) => !open)}>
-                  <Sparkles size={14} /><span>{t("Актуальные подсказки", "Suggested follow-ups")}</span><small>{activeSuggestions.length}</small><ChevronDown size={14} className="section-chevron" />
-                </button>
-                {suggestionsExpanded && <button type="button" className="refresh-suggestions" onClick={() => setSuggestionOffset((offset) => (offset + 1) % activeSuggestions.length)} aria-label={t("Обновить подсказки", "Refresh suggestions")} title={t("Показать другие подсказки", "Show other suggestions")}><RefreshCw size={13} /><span>{t("Другие", "More")}</span></button>}
-              </div>
-              <div id="suggested-requests" className={`inline-disclosure${suggestionsExpanded ? " is-open" : ""}`} aria-hidden={!suggestionsExpanded} inert={!suggestionsExpanded}>
-                <div className="inline-disclosure-inner">
-                  {suggestionsExpanded && <div className="suggestions" aria-label={t("Рекомендуемые запросы", "Suggested prompts")}>{visibleSuggestions.map((reply) => <button key={reply.label} onClick={() => chooseReply(reply.prompt)}><span>{reply.label}</span><ArrowUpRight size={14} /></button>)}</div>}
-                </div>
-              </div>
-            </div>
-            <form className="composer" onSubmit={submit}>
-              <textarea ref={composerRef} value={draft} readOnly={voice.state !== "idle"} onChange={(event) => updateDraft(event.target.value)} onKeyDown={handleComposerKeyDown} placeholder={t("Введите запрос · Enter — отправить, Shift+Enter — новая строка", "Ask a question · Enter to send, Shift+Enter for a new line")} rows={2} aria-label={t("Сообщение помощнику", "Message the assistant")} />
-              <div className="composer-footer">
-                <span className={voiceStatus ? `voice-status ${voice.state}${voice.issue ? " issue" : ""}` : undefined} role="status" aria-live="polite">
-                  {voiceStatus ?? t("Данные обрабатываются локально", "Data is processed locally")}
-                </span>
-                <div className="composer-actions">
-                  {pending && <button type="button" className="cancel-request" onClick={cancelRequest}><Square size={12} />{t("Остановить", "Stop")}</button>}
-                  {capabilities?.voiceInput && (
-                    <MicButton
+              <ChatHeader language={language} title={conversationName} busy={pending || historyResetPending} recentChats={recentChats} resultSources={resultSources} onNewChat={startNewConversation} onOpenChat={openRecentChat} onResetHistory={() => void resetHistory()} />
+              <ChatFilters
+                language={language}
+                expanded={filtersExpanded}
+                onToggle={() => setFiltersExpanded((open) => !open)}
+                sources={sources}
+                sourcesFailed={sourceLoadFailed}
+                databaseUnavailable={capabilities?.assistantStatus === "data_unavailable"}
+                filters={{ selectedSourceIds, fromDate, toDate }}
+                onSources={setSelectedSourceIds}
+                onFromDate={setFromDate}
+                onToDate={setToDate}
+                dateRangeInvalid={dateRangeInvalid}
+              />
+              <div className="messages-scroll-frame">
+                <div className="messages" ref={chatScroll.viewportRef} onScroll={chatScroll.onScroll} tabIndex={0} aria-label={t("Сообщения чата", "Chat messages")}>
+                  {messages.map((message, index) => {
+                    // The text of the running turn is shown in its live card until the answer replaces it.
+                    if (pending && message.streaming && index === messages.length - 1) return null;
+                    if (message.role === "user") return <UserBubble key={`${index}-user`} message={message} language={language} />;
+                    return <AnswerCard
+                      key={`${index}-assistant`}
+                      message={message}
                       language={language}
-                      state={voice.state}
-                      disabled={connection !== "connected"}
-                      onStart={startVoiceInput}
-                      onStop={voice.stop}
-                    />
-                  )}
-                  <button type="submit" disabled={!draft.trim() || pending || voice.state !== "idle" || dateRangeInvalid || connection !== "connected"} aria-label={t("Отправить запрос", "Send request")}><ArrowUp size={17} /></button>
+                      body={<Suspense fallback={<p>{message.text}</p>}><MarkdownMessage text={message.text} citations={message.citations} onCite={showCitation} /></Suspense>}
+                      sources={message.citations?.length ? <CitationList citations={message.citations} mode={message.citationsMode} language={language} sourceLabels={sourceLabels} isOnMap={citationOnMap} onShow={showCitation} /> : undefined}
+                      feedback={message.requestId ? <AnswerFeedback key={message.requestId} language={language} requestId={message.requestId} /> : undefined}
+                      pending={pending}
+                      onShowOnMap={index === lastResultIndex && resultsLoaded ? () => setResetViewportRevision((revision) => revision + 1) : undefined}
+                      onChoice={(label) => { setDraft(label); composerRef.current?.focus(); }}
+                      onRetry={(query) => { send(query); }}
+                    />;
+                  })}
+                  {pending && turnStartedAt !== null && <LiveTurnCard steps={turnSteps} startedAt={turnStartedAt} label={progressLabel ?? t("Думаю", "Thinking")} text={streamingText} language={language} body={<Suspense fallback={<p>{streamingText}</p>}><MarkdownMessage text={streamingText} /></Suspense>} />}
                 </div>
+                <div className="chat-edge-fade chat-edge-fade-top" aria-hidden="true" />
+                <div className="chat-edge-fade chat-edge-fade-bottom" aria-hidden="true" />
               </div>
-            </form>
+              {historyClearWarning && <div className="history-warning" role="status">{historyClearWarning}</div>}
+              {appliedFilters.length > 0 && <div className="applied-filters" aria-label={t("Применённые сервером фильтры", "Filters applied by the server")}>{formatAppliedFilters(appliedFilters, sourcesRef.current, language).map((filter) => <span key={filter}>{filter}</span>)}</div>}
+              <SuggestionsPanel
+                language={language}
+                expanded={suggestionsExpanded}
+                onToggle={() => setSuggestionsExpanded((open) => !open)}
+                total={activeSuggestions.length}
+                visible={rotateSuggestions(activeSuggestions, suggestionOffset)}
+                onMore={() => setSuggestionOffset((offset) => (offset + 1) % activeSuggestions.length)}
+                onChoose={chooseReply}
+              />
+              <ChatComposer
+                language={language}
+                composerRef={composerRef}
+                draft={draft}
+                onDraft={updateDraft}
+                onSubmit={() => { if (send(draft.trim())) setDraft(""); }}
+                dictating={voice.state !== "idle"}
+                canSend={Boolean(draft.trim()) && !pending && voice.state === "idle" && !dateRangeInvalid && connection === "connected"}
+                statusText={voiceStatus ?? t("Данные обрабатываются локально", "Data is processed locally")}
+                statusClass={voiceStatus ? `voice-status ${voice.state}${voice.issue ? " issue" : ""}` : undefined}
+                pending={pending}
+                onCancel={cancelRequest}
+                mic={capabilities?.voiceInput ? <MicButton language={language} state={voice.state} disabled={connection !== "connected"} onStart={startVoiceInput} onStop={voice.stop} /> : undefined}
+              />
             </div>
             {visitedModes.has("events") && <div className="map-mode-pane" hidden={mapMode !== "events"}>
               <Suspense fallback={<p className="investigation-state" role="status">{t("Загружаем…", "Loading…")}</p>}>
@@ -787,70 +593,4 @@ export default function AssistantWorkspace() {
       <ImportLayer language={language} />
     </main>
   );
-}
-
-function joinDraft(base: string, transcript: string): string {
-  const trimmedBase = base.trimEnd();
-  const trimmedTranscript = transcript.trim();
-  if (!trimmedBase) return trimmedTranscript;
-  if (!trimmedTranscript) return trimmedBase;
-  return `${trimmedBase} ${trimmedTranscript}`;
-}
-
-function conversationTitle(messages: Message[], language: Language = "en"): string {
-  const firstRequest = messages.find((message) => message.role === "user")?.text.trim();
-  if (!firstRequest) return translate(language, "Новый запрос", "New chat");
-  return firstRequest.length > 42 ? `${firstRequest.slice(0, 42).trimEnd()}…` : firstRequest;
-}
-
-function formatChatDate(timestamp: number, language: Language): string {
-  return new Intl.DateTimeFormat(language === "ru" ? "ru-RU" : language === "de" ? "de-DE" : "en-US", { day: "numeric", month: "short" }).format(timestamp);
-}
-
-function elapsedSince(startedAt: number | null): number {
-  return startedAt === null ? 0 : Math.max(0, Math.round(performance.now() - startedAt));
-}
-
-function localDateBoundary(value: string, endOfDay: boolean): string {
-  return new Date(`${value}T${endOfDay ? "23:59:59.999" : "00:00:00"}`).toISOString();
-}
-
-function invalidDateRange(from: string, to: string): boolean {
-  return Boolean(from && to && from > to);
-}
-
-function formatAppliedFilters(filters: Array<Record<string, unknown>>, sources: SourceView[], language: Language): string[] {
-  const ru = language === "ru";
-  const de = language === "de";
-  const sourceNames = new Map(sources.map((source) => [source.id, source.label]));
-  return filters.flatMap((filter) => {
-    if (filter.key === "sourceIds" && Array.isArray(filter.value)) {
-      const names = filter.value.filter((id): id is string => typeof id === "string").map((id) => sourceNames.get(id) ?? id);
-      return names.length ? [`${ru ? "Источники" : de ? "Quellen" : "Sources"}: ${names.join(", ")}`] : [];
-    }
-    if (filter.key === "dateRange" && filter.value && typeof filter.value === "object") {
-      const range = filter.value as { from?: unknown; to?: unknown };
-      const locale = ru ? "ru-RU" : de ? "de-DE" : "en-US";
-      const from = typeof range.from === "string" ? new Date(range.from).toLocaleDateString(locale) : "…";
-      const to = typeof range.to === "string" ? new Date(range.to).toLocaleDateString(locale) : "…";
-      return [`${ru ? "Период" : de ? "Zeitraum" : "Date range"}: ${from} — ${to}`];
-    }
-    if (filter.key === "category" && typeof filter.value === "string") return [`${ru ? "Категория" : de ? "Kategorie" : "Category"}: ${filter.value}`];
-    return [];
-  });
-}
-
-function connectionLabel(connection: ConnectionState, reconnect: ReconnectInfo, language: Language): string {
-  if (connection === "connected") return translate(language, "Соединение активно", "Connected");
-  if (!reconnect) return translate(language, "Подключаемся", "Connecting");
-  const seconds = Math.max(1, Math.round(reconnect.retryInMs / 1000));
-  if (language === "ru") return `Переподключение через ${seconds} с · попытка ${reconnect.attempt}`;
-  if (language === "de") return `Neuverbindung in ${seconds} s · Versuch ${reconnect.attempt}`;
-  return `Reconnecting in ${seconds} s · attempt ${reconnect.attempt}`;
-}
-
-/** Ends the streaming state of the last message; its partial text stays visible. */
-function endStreaming(messages: Message[]): Message[] {
-  const last = messages.at(-1);
-  return last?.streaming ? [...messages.slice(0, -1), { role: last.role, text: last.text }] : messages;
 }
