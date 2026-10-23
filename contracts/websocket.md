@@ -63,6 +63,7 @@ Rules:
 - Optional `language` is `"en"`, `"ru"`, or `"de"` and controls the assistant response and progress/error text for this turn. If omitted, the backend defaults to English.
 - Values in `sourceIds` and `polygonIds` have length/count limits and are validated by the backend schema.
 - The MVP allows one active turn per connection; concurrent turns receive `turn.error` with code `busy`.
+- Optional `answers` answer the fields of the previous `turn.clarification`: `[{ "key": "period", "values": ["720"] }, { "key": "magnitude", "values": ["2"] }]`. Keys are `period`, `sources`, `radius`, `magnitude`, `days`, `travel`; values must be option IDs the server offered. The server checks them again, drops anything else, and applies them to this turn only: chosen event sources become its `sourceIds`, and the other details are added to the message in words ("Details: in the last 30 days, magnitude 2 or more."). The chat sends the request that was asked about again with its answers, so the turn stands on its own; the filters' labels stay on the user's message in the browser.
 
 ### `turn.cancel`
 
@@ -206,7 +207,24 @@ Incremental user-facing text only. Never stream model reasoning/thinking content
 }
 ```
 
-Clarification completes the current turn. The next user answer is a new `turn.submit` with the same `conversationId` and a new `requestId`.
+Optional `fields` are one-time filters the user can answer with; the server builds their options (the client never invents them):
+
+```json
+"fields": [
+  { "key": "period", "label": "Period", "multiple": false, "options": [{ "id": "24", "label": "24 hours" }, { "id": "168", "label": "7 days" }, { "id": "720", "label": "30 days" }, { "id": "2160", "label": "90 days" }] },
+  { "key": "sources", "label": "Sources", "multiple": true, "options": [{ "id": "ingv-fdsn", "label": "INGV earthquake catalogue" }, { "id": "usgs-fdsn", "label": "USGS earthquake catalogue" }] }
+]
+```
+
+The server asks with fields when guessing would change the answer: an earthquake search whose call and text name no period (`period`, plus `magnitude`, `radius`, and `sources` when they are missing too), and a trip plan without a route mode (`travel`, plus `days` when the length is unknown). Exam turns never ask. Clarification completes the current turn. The next user answer is a new `turn.submit` with the same `conversationId` and a new `requestId`, with or without `answers`.
+
+### `turn.suggestions`
+
+```json
+{ "protocolVersion": 1, "type": "turn.suggestions", "requestId": "req-001", "source": "model", "suggestions": [{ "label": "Strongest event", "prompt": "Which was the strongest earthquake near Norcia this month?" }] }
+```
+
+Sent after `turn.completed`, with the same `requestId`: up to three follow-up requests the local model wrote from the last exchange and what is on the map (`label` for the chip, `prompt` for the composer). The model runs one generation at a time, so this happens right after the answer and takes a few seconds; a new `turn.submit` stops it. `source: "none"` with no suggestions means the model was busy, slow (45 s), or wrote nothing usable; the client then shows its own suggestions. Suggestions are checked on the server: plain text of bounded length, no tool names, code, or links, and not the last request again.
 
 ### `turn.completed`
 
@@ -351,7 +369,7 @@ Voice lifecycle: `voice.start` → `voice.ready` → zero or more `voice.transcr
 
 ## Turn lifecycle
 
-Normal turn: `turn.accepted` → zero or more `turn.status` / `turn.step` / `turn.progress` / tool events / `assistant.delta` → exactly one terminal event (`turn.completed`, `turn.clarification`, `turn.cancelled`, or `turn.error`). Terminal event frees the connection for its next turn.
+Normal turn: `turn.accepted` → zero or more `turn.status` / `turn.step` / `turn.progress` / tool events / `assistant.delta` → exactly one terminal event (`turn.completed`, `turn.clarification`, `turn.cancelled`, or `turn.error`). Terminal event frees the connection for its next turn. After `turn.completed`, one `turn.suggestions` with the same `requestId` follows unless the next turn starts first.
 
 ## Versioning and compatibility
 

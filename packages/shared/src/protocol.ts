@@ -75,7 +75,8 @@ export interface ImportJob {
 
 export type ClientFrame =
   | (ClientBase & { type: "session.start"; workspaceId?: string })
-  | (ClientBase & { type: "turn.submit"; conversationId: string | null; message: string; scope: Scope })
+  /** `answers` are the values chosen in the fields of the previous clarification; they apply to this turn only. */
+  | (ClientBase & { type: "turn.submit"; conversationId: string | null; message: string; scope: Scope; answers?: ClarificationAnswer[] })
   | (ClientBase & { type: "turn.cancel" })
   | (ClientBase & { type: "voice.start"; language?: Language })
   | (ClientBase & { type: "voice.audio"; audio: string })
@@ -172,6 +173,28 @@ export interface TripPlan {
   sourceIds: string[];
 }
 
+/** A filter the assistant can ask for in a clarification. */
+export type ClarificationFieldKey = "period" | "sources" | "radius" | "magnitude" | "days" | "travel";
+
+export interface ClarificationField {
+  key: ClarificationFieldKey;
+  label: string;
+  /** Several options may be chosen (sources); otherwise one. */
+  multiple: boolean;
+  options: Array<{ id: string; label: string }>;
+}
+
+export interface ClarificationAnswer {
+  key: ClarificationFieldKey;
+  values: string[];
+}
+
+/** A follow-up request: a short label for the chip and the full text it puts into the composer. */
+export interface SuggestedRequest {
+  label: string;
+  prompt: string;
+}
+
 export type ServerFrame =
   | (ClientBase & { type: "session.ready"; connectionId: string; assistantStatus: AssistantStatus; modelLabel: string | null; demoMode: boolean; supportedFilters: string[]; voiceInput?: boolean })
   | (ClientBase & { type: "turn.accepted"; conversationId: string })
@@ -188,7 +211,10 @@ export type ServerFrame =
   | (ClientBase & { type: "tool.started"; tool: ToolName; label: string })
   | (ClientBase & { type: "tool.completed"; tool: ToolName; recordsFound: number })
   | (ClientBase & { type: "assistant.delta"; text: string })
-  | (ClientBase & { type: "turn.clarification"; conversationId: string; message: string; choices: Array<{ id: string; label: string }> })
+  /** A question from the assistant; `fields` are one-time filters with options built by the server. */
+  | (ClientBase & { type: "turn.clarification"; conversationId: string; message: string; choices: Array<{ id: string; label: string }>; fields?: ClarificationField[] })
+  /** Follow-up requests written by the model after an answer; "none" when it could not write them (the client uses its own). */
+  | (ClientBase & { type: "turn.suggestions"; suggestions: SuggestedRequest[]; source: "model" | "none" })
   | (ClientBase & { type: "turn.completed"; conversationId: string; assistantMessage: string; appliedFilters: Array<Record<string, unknown>>; result: { total: number; records: RecordView[]; places?: PlaceView[]; tripPlan?: TripPlan; searchArea?: SearchArea; mapFeatures: GeoJSON.FeatureCollection }; sources: SourceView[]; citations?: Citation[]; citationsMode?: "cited" | "shown_to_model"; models?: string[] })
   | (ClientBase & { type: "turn.cancelled" })
   | (ClientBase & { type: "turn.error"; code: string; message: string; retryable: boolean })

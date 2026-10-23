@@ -21,21 +21,6 @@ export function mapFeatures(records: RecordView[], places: PlaceView[]) {
   return { type: "FeatureCollection", features: [...records.map(recordFeature), ...places.map(placeFeature)] };
 }
 
-/** plan_trip asked how to travel between cities; only driving routes exist. */
-export function routeModeQuestion(cities: string[], language: Language) {
-  const list = cities.join(", ");
-  const message = language === "ru" ? `Сейчас приложение умеет строить только автомобильный маршрут. Построить его по дням (${list})?`
-    : language === "de" ? `Die App kann nur Autorouten berechnen. Soll ich für jeden Tag eine Autoroute hinzufügen (${list})?`
-      : `The app can calculate driving routes only. Should I add a driving route for each day (${list})?`;
-  return {
-    message,
-    choices: [
-      { id: "route-driving", label: text(language, "Да, автомобильный маршрут", "Yes, use a driving route") },
-      { id: "route-none", label: text(language, "Нет, только список мест", "No, places only") },
-    ],
-  };
-}
-
 /** The error frame's code and text for a failed turn. */
 export function turnFailure(kind: "timeout" | "model_unavailable" | "internal_error", requestId: string, language: Language): string {
   if (kind === "timeout") return text(language, "Локальная модель прервала обработку. Попробуйте повторить запрос или разделить его на части.", "The local model interrupted generation. Try again or split the request into smaller parts.");

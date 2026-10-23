@@ -1,11 +1,11 @@
-import type { ClientFrame, PlaceView, RecordView, ServerFrame, ToolName, TripPlan } from "@waypoint-ai/shared";
+import type { ClarificationField, ClientFrame, PlaceView, RecordView, ServerFrame, ToolName, TripPlan } from "@waypoint-ai/shared";
 import { env } from "../config/env.js";
 import { placeCoverage } from "../data/coverage.js";
 import { getConversationMessages, getConversationTripPlan, saveConversationTurn as saveTurnToHistory } from "../data/conversation.repository.js";
 import { recordTurn as journalTurn, type NewJournalEntry } from "../data/journal.repository.js";
 import { getPlacesByIds, getSources } from "../data/record.repository.js";
 import { enabledLessons, markLessonsApplied } from "../data/training.repository.js";
-import { releaseInference, tryAcquireInference } from "../llm/inference-gate.js";
+import { acquireInference, releaseInference } from "../llm/inference-gate.js";
 import { chat, OllamaUnavailableError, type ChatMessage, type ChatOptions, type ToolDefinition } from "../llm/ollama.provider.js";
 import { ALLOWED_TOOLS } from "../tools/allowlist.js";
 import { assistantToolDefinitions, executeAssistantTool, type SearchArea, type ToolExecutionResult } from "../tools/assistant-tools.js";
@@ -16,6 +16,7 @@ import { normalizeToolArguments } from "../tools/search-events.js";
 import { CitationRegistry, stripCitationRefs } from "./citations.js";
 import { text, toolLabel } from "./copy.js";
 import { buildLessonBlock, type AppliedLesson, type Lesson } from "./lessons.js";
+import type { FollowUpContext } from "./follow-ups.js";
 import { formatPlaceResultsMessage } from "./place-results-message.js";
 import { classifyPlanIntent, type PlanIntent } from "./plan-intent.js";
 import { executePlanTrip } from "./plan-trip.js";
@@ -24,8 +25,9 @@ import { describePlanForModel, type TripPlanChange } from "./trip-plan-edit.js";
 import { formatTripPlanEditMessage, formatTripPlanMessage } from "./trip-plan-message.js";
 import { currentPlanPrompt, replyPrompt, selectedItemPrompt, systemPrompt, toolRequiredPrompt } from "./turn-prompts.js";
 import { TurnMetrics, TurnReporter } from "./turn-reporter.js";
-import { mapFeatures, notProcessedText, placeFeature, routeModeQuestion, toolFailedDetail, turnFailure } from "./turn-result.js";
-import { planTripDependencies, resolveSelectedMapItem, runTripPlanEdit, selectionPoint, toolStepLabel } from "./turn-tools.js";
+import { mapFeatures, notProcessedText, placeFeature, toolFailedDetail, turnFailure } from "./turn-result.js";
+import { buildClarificationFields, eventDetailsQuestion, eventDetailsToAsk, tripDetailsQuestion, tripHasDays } from "./clarification.js";
+import { applyAnswers, eventSources, planTripDependencies, resolveSelectedMapItem, runTripPlanEdit, selectionPoint, toolStepLabel } from "./turn-tools.js";
 
 /** A router answer is one short JSON object. */
 const ROUTER_MAX_TOKENS = 160;
@@ -60,6 +62,8 @@ export interface TurnOptions {
    * prompt. Defaults to ROUTER_MODEL. Set only by the server.
    */
   routerModel?: string | null;
+  /** Called when the turn ends with an answer, with what follow-up suggestions are written from (chat turns only). */
+  onFollowUp?: (context: FollowUpContext) => void;
 }
 
 type SubmitFrame = Extract<ClientFrame, { type: "turn.submit" }>;
@@ -71,17 +75,20 @@ type ToolOutcome = {
   usedOtherDataTool: boolean;
   editedPlan: (EditablePlan & { changes: TripPlanChange[] }) | null;
   createdPlan: EditablePlan | null;
-  routeModeCities: string[] | null;
+  /** A question with one-time filters, asked instead of guessing a missing detail. */
+  clarification: { message: string; fields: ClarificationField[] } | null;
 };
 
 export async function processTurn(
-  frame: SubmitFrame, conversationId: string, signal: AbortSignal,
+  submitted: SubmitFrame, conversationId: string, signal: AbortSignal,
   sendFrame: (event: ServerFrame) => void,
   options: TurnOptions = {},
 ): Promise<void> {
-  const reporter = new TurnReporter(frame.requestId, sendFrame);
+  const reporter = new TurnReporter(submitted.requestId, sendFrame);
   const emit = (event: ServerFrame) => reporter.emit(event);
-  const language = frame.scope.language ?? "en";
+  const language = submitted.scope.language ?? "en";
+  // Values chosen in the fields of a clarification: checked against the server's options, applied to this turn only.
+  const { frame, answered } = await applyAnswers(submitted, language);
   const refuse = (code: "source_unavailable" | "invalid_message" | "busy", message: string, retryable: boolean) => emit({ protocolVersion: 1, type: "turn.error", requestId: frame.requestId, code, message, retryable });
   if (frame.scope.polygonIds?.length) {
     refuse("source_unavailable", text(language, "Фильтр по области пока не подключён к данным сервера.", "Area filtering is not connected to the server data yet."), false);
@@ -91,7 +98,7 @@ export async function processTurn(
     refuse("invalid_message", text(language, "Начало периода должно быть раньше его окончания.", "The start date must be before the end date."), false);
     return;
   }
-  if (!tryAcquireInference()) {
+  if (!(await acquireInference())) {
     refuse("busy", text(language, "Помощник уже обрабатывает другой запрос. Попробуйте чуть позже.", "The assistant is already handling another request. Please try again shortly."), true);
     return;
   }
@@ -126,6 +133,7 @@ export async function processTurn(
     await saveConversationTurn(conversationId, workspaceId, [...history, { role: "user", content: frame.message }, { role: "assistant", content: message.split("\n\n")[0]! }], plan);
     turnOutcome = "completed";
     reporter.sections(message);
+    followUp(message, `trip plan: ${plan.cities?.map((city) => city.name).join(", ") || plan.city}, ${plan.totalDays} days, ${plan.travelMode === "driving" ? "driving route per day" : "places only"}`, "trip");
     emit({
       protocolVersion: 1, type: "turn.completed", requestId: frame.requestId, conversationId, assistantMessage: message, appliedFilters: [
         ...(allowedSourceIds?.length ? [{ key: "sourceIds", value: allowedSourceIds }] : []),
@@ -155,6 +163,15 @@ export async function processTurn(
     streamed = true;
     reporter.delta(fragment);
   };
+  const followUp = (answer: string, onMap: string | null, topic: FollowUpContext["topic"]) => options.onFollowUp?.({
+    requestId: frame.requestId,
+    language,
+    question: submitted.message.slice(0, 400),
+    previousQuestion: [...history].reverse().find((entry) => entry.role === "user")?.content.slice(0, 300) ?? null,
+    answer: stripCitationRefs(answer).slice(0, 600),
+    onMap,
+    topic,
+  });
 
   try {
     const databaseStartedAt = performance.now();
@@ -215,7 +232,9 @@ export async function processTurn(
     let finished = false;
     let retriedWithoutTool = false;
     // What the tool calls produced; kept in one object because the tools run in closures.
-    const produced: ToolOutcome = { lastPlaceSearch: null, usedOtherDataTool: false, editedPlan: null, createdPlan: null, routeModeCities: null };
+    const produced: ToolOutcome = { lastPlaceSearch: null, usedOtherDataTool: false, editedPlan: null, createdPlan: null, clarification: null };
+    // A question this turn asked already is not asked again when the user answers it in their own words.
+    const lastAssistant = [...conversationHistory].reverse().find((entry) => entry.role === "assistant")?.content ?? "";
     let replyRequested = false;
     let thinking = reporter.step(text(language, "Понимаю запрос", "Understanding the request"));
     const routerModel = options.routerModel === undefined ? env.ROUTER_MODEL ?? null : options.routerModel;
@@ -246,7 +265,10 @@ export async function processTurn(
         step.fail(toolFailedDetail(language));
       } else {
         if (outcome.kind === "planned") produced.createdPlan = { plan: outcome.plan, places: outcome.places };
-        if (outcome.kind === "ask_route_mode") produced.routeModeCities = outcome.cities;
+        if (outcome.kind === "ask_route_mode") {
+          const askDays = !answered.has("days") && !tripHasDays(call.function.arguments);
+          produced.clarification = { message: tripDetailsQuestion(outcome.cities, askDays, language), fields: buildClarificationFields(askDays ? ["days", "travel"] : ["travel"], language) };
+        }
         step.done(outcome.kind === "planned" ? text(language, `${outcome.plan.totalDays} дн., ${outcome.places.length} точек`, `${outcome.plan.totalDays} days, ${outcome.places.length} stops`) : text(language, "нужно выбрать маршрут", "route choice needed"));
       }
       messages.push({ role: "tool", tool_name: PLAN_TRIP_TOOL, content: JSON.stringify(outcome.kind === "error" ? { error: outcome.error } : { ok: true }) });
@@ -268,6 +290,17 @@ export async function processTurn(
       completed(outcome.ok ? outcome.places.length : 0);
     };
     const searchData = async (toolName: ToolName, call: ToolCall, journalCall: JournalCall) => {
+      // An earthquake search without a period would show the default week; the user picks the details instead.
+      // Exam turns answer as asked, and a question already asked is not repeated.
+      const missing = toolName === "search_events" && !options.ephemeral && !answered.has("period") && !frame.scope.dateRange?.from && !frame.scope.dateRange?.to && lastAssistant !== eventDetailsQuestion(language)
+        ? eventDetailsToAsk(call.function.arguments, frame.message) : null;
+      if (missing) {
+        const sources = await eventSources().catch(() => []);
+        produced.clarification = { message: eventDetailsQuestion(language), fields: buildClarificationFields([...missing, ...(sources.length > 1 ? ["sources" as const] : [])], language, sources) };
+        messages.push({ role: "tool", tool_name: toolName, content: JSON.stringify({ askedUser: missing }) });
+        reporter.step(toolStepLabel(toolName, call.function.arguments, language)).done(text(language, "нужны детали", "details needed"));
+        return;
+      }
       const { outcome: result, step, completed } = await runTool(toolName, call, text(language, "Ищу в локальной базе", "Searching the local database"),
         () => executeAssistantTool(toolName, call.function.arguments, frame.scope, allowedSourceIds, selectionPoint(selectedContext), frame.message));
       messages.push({ role: "tool", tool_name: toolName, content: JSON.stringify(citations.annotate(result.content, result)) });
@@ -372,9 +405,10 @@ export async function processTurn(
         if (toolName === PLAN_TRIP_TOOL) await planTrip(call, journalCall);
         else if (toolName === EDIT_TRIP_PLAN_TOOL) await editTripPlan(call, journalCall);
         else await searchData(toolName, call, journalCall);
+        if (produced.clarification) break;
       }
       // A new or edited plan is described from verified rows; the model is not asked to retell it.
-      if (finished || produced.createdPlan || produced.editedPlan || produced.routeModeCities) break;
+      if (finished || produced.createdPlan || produced.editedPlan || produced.clarification) break;
       // Place results are listed from the rows as well, so the answer cannot name places the search did not return.
       // An empty first search goes back to the model once, which can retry with another spelling or kind.
       if (produced.lastPlaceSearch && !produced.usedOtherDataTool && (produced.lastPlaceSearch.places.length || iteration > 0)) {
@@ -403,11 +437,11 @@ export async function processTurn(
       if (!finalText || /^[a-z_]+\s*[({]/i.test(finalText)) finalText = notProcessedText(language);
       messages.push({ role: "assistant", content: finalText });
     }
-    if (produced.routeModeCities) {
-      const question = routeModeQuestion(produced.routeModeCities, language);
-      await saveConversationTurn(conversationId, workspaceId, [...history, { role: "user", content: frame.message }, { role: "assistant", content: question.message }]);
+    if (produced.clarification) {
+      const { message, fields } = produced.clarification;
+      await saveConversationTurn(conversationId, workspaceId, [...history, { role: "user", content: frame.message }, { role: "assistant", content: message }]);
       turnOutcome = "completed";
-      emit({ protocolVersion: 1, type: "turn.clarification", requestId: frame.requestId, conversationId, ...question });
+      emit({ protocolVersion: 1, type: "turn.clarification", requestId: frame.requestId, conversationId, message, choices: [], fields });
       return;
     }
     const { createdPlan: newPlan, editedPlan: changedPlan } = produced;
@@ -437,6 +471,12 @@ export async function processTurn(
     await saveConversationTurn(conversationId, workspaceId, messages.map((message) => message.role === "assistant" ? { ...message, content: stripCitationRefs(message.content) } : message));
     turnOutcome = "completed";
     if (!streamed) reporter.sections(finalText);
+    const keptPlan = keepPlan ? `trip plan: ${keepPlan.plan.city}, ${keepPlan.plan.totalDays} days` : null;
+    followUp(finalText, found.length
+      ? `${totalRecords} earthquakes${searchArea ? ` within ${searchArea.radiusKm} km of ${searchArea.label}` : ""}`
+      : placesFound.length && !keepPlan
+        ? `${totalPlaces} places (${[...new Set(placesFound.map((place) => place.category?.split(":").at(-1)).filter(Boolean))].slice(0, 3).join(", ")}) in ${[...new Set(placesFound.map((place) => place.city).filter(Boolean))].slice(0, 2).join(", ") || "the found area"}`
+        : keptPlan, found.length ? "events" : placesFound.length && !keepPlan ? "places" : keepPlan ? "trip" : "other");
     emit({
       protocolVersion: 1, type: "turn.completed", requestId: frame.requestId, conversationId, assistantMessage: finalText, appliedFilters: [
         ...(allowedSourceIds?.length ? [{ key: "sourceIds", value: allowedSourceIds }] : []),

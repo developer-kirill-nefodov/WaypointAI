@@ -1,5 +1,7 @@
-import type { PlaceView, ToolName, TripPlan } from "@waypoint-ai/shared";
-import { getPlaceDetails, getRecordDetails, searchNearbyPlaces, searchPlaces } from "../data/record.repository.js";
+import type { ClarificationFieldKey, ClientFrame, PlaceView, SourceView, ToolName, TripPlan } from "@waypoint-ai/shared";
+import { getPlaceDetails, getRecordDetails, getSources, searchNearbyPlaces, searchPlaces } from "../data/record.repository.js";
+import { EVENT_SOURCE_IDS } from "../sources/registry.js";
+import { applyClarificationAnswers } from "./clarification.js";
 import { resolveSettlement } from "../data/settlement.repository.js";
 import { toolLabel, text } from "./copy.js";
 import type { PlanTripDependencies } from "./plan-trip.js";
@@ -81,4 +83,27 @@ export function toolStepLabel(tool: ToolName, rawArgs: unknown, language: "en" |
       : [plain(args.kind), plain(args.category), plain(args.query), plain(args.city), plain(args.place), args.radiusKm ? `${plain(args.radiusKm)} km` : null];
   const summary = details.filter((value) => value && value !== "any").join(" · ");
   return summary ? `${toolLabel(tool, language)}: ${summary}` : toolLabel(tool, language);
+}
+
+type SubmitFrame = Extract<ClientFrame, { type: "turn.submit" }>;
+
+/** The imported event catalogues, offered as a field of an earthquake clarification. */
+export async function eventSources(): Promise<SourceView[]> {
+  const sources = await getSources([...EVENT_SOURCE_IDS]);
+  return (sources as SourceView[]).filter((source) => source.status === "ready");
+}
+
+/**
+ * The turn with the answers of a clarification applied: the details in its text and chosen event sources in its
+ * scope. Unknown sources and values outside the offered options are dropped.
+ */
+export async function applyAnswers(frame: SubmitFrame, language: "en" | "ru" | "de"): Promise<{ frame: SubmitFrame; answered: Set<ClarificationFieldKey> }> {
+  if (!frame.answers?.length) return { frame, answered: new Set() };
+  const requested = frame.answers.find((answer) => answer.key === "sources")?.values ?? [];
+  const known = requested.length ? new Set((await eventSources().catch(() => [])).map((source) => source.id)) : new Set<string>();
+  const applied = applyClarificationAnswers(frame, language, known);
+  return {
+    frame: { ...frame, message: applied.message, scope: applied.sourceIds ? { ...frame.scope, sourceIds: applied.sourceIds } : frame.scope },
+    answered: applied.answered,
+  };
 }

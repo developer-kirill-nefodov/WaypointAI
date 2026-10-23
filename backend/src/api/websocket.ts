@@ -3,6 +3,7 @@ import type { ClientFrame, ServerFrame } from "@waypoint-ai/shared";
 import type { IncomingMessage, Server } from "node:http";
 import { WebSocket, WebSocketServer } from "ws";
 import { processTurn } from "../assistant/turn.js";
+import { writeFollowUps, type FollowUpContext } from "../assistant/follow-ups.js";
 import { hasConversation } from "../data/conversation.repository.js";
 import { env } from "../config/env.js";
 import { ActiveTurnGate } from "./active-turn.js";
@@ -60,6 +61,8 @@ export function attachWebSocket(server: Server): (code: number, reason: string) 
       openRealtimeTranscription,
       (event) => send(websocket, event),
     );
+    // Follow-up suggestions of the last answer, written in the background; a new turn or a closed socket stops them.
+    let followUps: AbortController | null = null;
     websocket.on("message", async (raw) => {
       let frame: unknown;
       try { frame = JSON.parse(raw.toString()); } catch {
@@ -98,6 +101,8 @@ export function attachWebSocket(server: Server): (code: number, reason: string) 
           send(websocket, { protocolVersion: 1, type: "turn.error", requestId: clientFrame.requestId, code: "busy", message: getLanguage(clientFrame) === "ru" ? "Сначала завершите текущий запрос в этом соединении." : "Finish the active request in this connection first.", retryable: true });
           return;
         }
+        followUps?.abort();
+        followUps = null;
         const controller = new AbortController();
         const turn = { requestId: clientFrame.requestId, controller };
         if (!activeTurn.tryAcquire(turn)) {
@@ -122,17 +127,25 @@ export function attachWebSocket(server: Server): (code: number, reason: string) 
             return;
           }
           send(websocket, { protocolVersion: 1, type: "turn.accepted", requestId: clientFrame.requestId, conversationId });
-          await processTurn(clientFrame, conversationId, controller.signal, (event) => send(websocket, event));
+          let followUp: FollowUpContext | null = null;
+          await processTurn(clientFrame, conversationId, controller.signal, (event) => send(websocket, event), { onFollowUp: (context) => { followUp = context; } });
+          if (followUp && !controller.signal.aborted) {
+            const current = new AbortController();
+            followUps = current;
+            void writeFollowUps(followUp, (event) => send(websocket, event), current.signal).finally(() => { if (followUps === current) followUps = null; });
+          }
         } finally {
           activeTurn.release(turn);
         }
       }
     });
     websocket.on("close", () => {
+      followUps?.abort();
       activeTurn.current?.controller.abort();
       voice.dispose();
     });
     websocket.on("error", () => {
+      followUps?.abort();
       activeTurn.current?.controller.abort();
       voice.dispose();
     });
