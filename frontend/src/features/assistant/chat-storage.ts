@@ -1,4 +1,4 @@
-import type { Citation, PlaceView, RecordView, SearchArea, SourceView, TripPlan } from "@waypoint-ai/shared";
+import type { Citation, ClarificationField, PlaceView, RecordView, SearchArea, SourceView, SuggestedRequest, TripPlan } from "@waypoint-ai/shared";
 
 /**
  * One line of a turn's progress feed. startedAt is the client's clock when the step began (for the live timer);
@@ -21,6 +21,14 @@ export type Message = {
   at?: number; kind?: MessageKind; models?: string[]; result?: ResultSummary;
   /** The request an error or a stop belongs to, for "Send again". */
   query?: string;
+  /** A clarification's one-time filters; answered once, by the next message. */
+  fields?: ClarificationField[];
+  /** The filters the user chose for this message, shown as labels in its bubble. */
+  tags?: string[];
+  /** The message answers a clarification with its filters only: the bubble shows the labels, not the text sent. */
+  tagsOnly?: boolean;
+  /** Follow-up requests the model wrote for this answer. */
+  suggestions?: SuggestedRequest[];
 };
 
 /** What the last completed turn of a chat put on the map, kept so the chat can be reopened with its results. */
@@ -137,7 +145,7 @@ function readMessages(value: unknown): Message[] {
     Boolean(item && typeof item === "object" && "role" in item && "text" in item)
     && ((item as Message).role === "user" || (item as Message).role === "assistant")
     && typeof (item as Message).text === "string",
-  ).slice(-MAX_MESSAGES).map(({ streaming: _streaming, citations, citationsMode, requestId, kind, models, result, at, query, ...message }) => {
+  ).slice(-MAX_MESSAGES).map(({ streaming: _streaming, citations, citationsMode, requestId, kind, models, result, at, query, fields, tags, tagsOnly, suggestions, ...message }) => {
     if (typeof requestId === "string" && requestId.length <= 120) (message as Message).requestId = requestId;
     // Fields added later are kept only in the shape the chat writes them.
     if (typeof kind === "string" && MESSAGE_KINDS.includes(kind)) (message as Message).kind = kind;
@@ -147,9 +155,25 @@ function readMessages(value: unknown): Message[] {
     }
     if (typeof at === "number" && Number.isFinite(at)) (message as Message).at = at;
     if (typeof query === "string" && query.length <= 4000) (message as Message).query = query;
+    if (Array.isArray(fields) && fields.length <= 4 && fields.every(isField)) (message as Message).fields = fields;
+    if (Array.isArray(tags) && tags.length <= 8 && tags.every((tag) => typeof tag === "string" && tag.length <= 120)) {
+      (message as Message).tags = tags;
+      if (tagsOnly === true) (message as Message).tagsOnly = true;
+    }
+    if (Array.isArray(suggestions) && suggestions.length <= 3 && suggestions.every((item) => item && typeof item.label === "string" && item.label.length <= 60 && typeof item.prompt === "string" && item.prompt.length <= 240)) {
+      (message as Message).suggestions = suggestions.map(({ label, prompt }) => ({ label, prompt }));
+    }
     const valid = Array.isArray(citations) ? citations.filter(isCitation).slice(0, 20) : [];
     return valid.length ? { ...message, citations: valid, citationsMode: citationsMode === "shown_to_model" ? "shown_to_model" : "cited" } : message;
   }) : [];
+}
+
+const FIELD_KEYS = new Set(["period", "sources", "radius", "magnitude", "days", "travel"]);
+function isField(value: unknown): value is ClarificationField {
+  if (!value || typeof value !== "object") return false;
+  const field = value as ClarificationField;
+  return FIELD_KEYS.has(field.key) && typeof field.label === "string" && typeof field.multiple === "boolean" && Array.isArray(field.options)
+    && field.options.length <= 20 && field.options.every((option) => typeof option?.id === "string" && typeof option.label === "string");
 }
 
 /** A stored citation is shown as a link, so only refs, labels, and HTTPS URLs of the expected shape are kept. */

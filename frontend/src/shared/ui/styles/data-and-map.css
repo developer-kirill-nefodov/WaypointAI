@@ -138,3 +138,50 @@
 .map-canvas .route-summary~.selected-item-card,.map-canvas .selected-item-card{margin:0}
 @media(max-width:560px){.map-canvas .selected-item-card{left:8px;right:8px;bottom:8px;width:auto;max-height:60%}}
 
+/* Each map mode keeps its own map (kept alive, hidden when another mode is shown); the shown mode fades in. */
+.map-mode-map{display:flex;flex-direction:column;min-width:0;min-height:0}.map-mode-map>.map-panel{flex:1 1 auto}.map-mode-map[hidden]{display:none}
+.map-mode-map:not([hidden]),.map-mode-pane:not([hidden]){animation:map-mode-in .16s ease-out}
+@keyframes map-mode-in{from{opacity:0}to{opacity:1}}
+@media(prefers-reduced-motion:reduce){.map-mode-map:not([hidden]),.map-mode-pane:not([hidden]){animation:none}}
+/* First-load cover of a map: hides the default view and the jump to the results, then fades out. */
+.map-loader{position:absolute;inset:-1px;z-index:1100;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:12px;background:radial-gradient(circle at 50% 46%,rgba(159,227,196,.10) 0,transparent 42%),linear-gradient(rgba(120,145,139,.10) 1px,transparent 1px) 0 0/36px 36px,linear-gradient(90deg,rgba(120,145,139,.10) 1px,transparent 1px) 0 0/36px 36px,#172629;color:#9fb3b0;transition:opacity .25s ease-out}
+.map-loader.done{opacity:0;pointer-events:none}
+.map-loader-ring{position:relative;display:grid;place-items:center;width:52px;height:52px;border-radius:50%;color:var(--mint);background:rgba(23,38,41,.85);box-shadow:0 0 24px rgba(159,227,196,.18)}
+.map-loader-ring::before{content:"";position:absolute;inset:-3px;border-radius:50%;border:2px solid rgba(159,227,196,.16);border-top-color:var(--mint);animation:map-loader-spin .9s linear infinite}
+.map-loader-ring::after{content:"";position:absolute;inset:-14px;border-radius:50%;border:1px solid rgba(159,227,196,.22);animation:map-loader-pulse 1.8s ease-out infinite}
+.map-loader-label{font-size:11px;letter-spacing:.2px}
+@keyframes map-loader-spin{to{transform:rotate(360deg)}}
+@keyframes map-loader-pulse{from{transform:scale(.7);opacity:.9}to{transform:scale(1.35);opacity:0}}
+@media(prefers-reduced-motion:reduce){.map-loader-ring::before,.map-loader-ring::after{animation:none}}
+/* Assistant map: the map fills the card; the plan or the results lie over it in a panel at the top right. */
+.map-mode-map>.map-panel{overflow:hidden}
+.map-mode-map .map-panel .map-canvas{flex:1 1 auto;min-height:360px}
+.map-results-panel{position:absolute;top:12px;right:12px;z-index:700;display:flex;flex-direction:column;width:min(380px,calc(100% - 24px));max-height:calc(100% - 24px);border:1px solid #3d5751;border-radius:14px;background:rgba(17,30,36,.92);box-shadow:0 14px 36px rgba(7,17,20,.55);color:#dce8e3;backdrop-filter:blur(14px);overflow:hidden;transform-origin:top right;animation:map-results-in .2s ease-out}
+.map-results-bar{display:flex;align-items:center;gap:8px;padding:10px 10px 10px 13px;border-bottom:1px solid #2c3f43;color:var(--mint);font-size:12px}
+.map-results-bar strong{color:#e6eeec;font-weight:650;white-space:nowrap}
+.map-results-count{flex:1;min-width:0;overflow:hidden;color:#8fa19f;font-size:11px;text-overflow:ellipsis;white-space:nowrap}
+.map-results-fold{display:grid;place-items:center;width:28px;height:28px;flex:0 0 28px;border:1px solid #33494b;border-radius:8px;background:#1b2a2f;color:#b7c5c2;cursor:pointer}
+.map-results-fold:hover{border-color:#547765;color:var(--mint)}
+.map-results-body{display:grid;gap:10px;min-height:0;padding:10px;overflow:auto;overscroll-behavior:contain}
+.map-results-body .trip-plan-board{margin:0;padding:2px;border:0;background:transparent}
+.map-results-body .server-results-list{max-height:none}
+.map-results-body .route-summary{position:static;width:auto;max-height:none;box-shadow:none;backdrop-filter:none}
+.map-results-chip{position:absolute;top:12px;right:12px;z-index:700;display:flex;align-items:center;gap:7px;max-width:calc(100% - 24px);padding:8px 13px;border:1px solid #3d5751;border-radius:999px;background:rgba(17,30,36,.92);box-shadow:0 8px 22px rgba(7,17,20,.45);color:#e6eeec;font-size:11px;font-weight:600;cursor:pointer;backdrop-filter:blur(10px);animation:map-results-in .16s ease-out}
+.map-results-chip svg{color:var(--mint)}.map-results-chip span{color:#8fa19f;font-weight:500}
+.map-results-chip:hover{border-color:#547765}
+.map-canvas.with-results-panel .boundary-legend{max-width:calc(100% - 480px)}
+.map-status-pill{position:absolute;right:12px;bottom:26px;z-index:650;display:flex;align-items:center;gap:8px;padding:7px 11px;border:1px solid #33494b;border-radius:10px;background:rgba(17,30,36,.88);color:#8fa19f;font-size:10px;backdrop-filter:blur(10px)}
+.map-status-pill strong{color:#dce8e3;font-weight:600}
+@keyframes map-results-in{from{opacity:0;transform:translateY(-6px) scale(.98)}to{opacity:1;transform:none}}
+@media(prefers-reduced-motion:reduce){.map-results-panel,.map-results-chip{animation:none}}
+@media(max-width:900px){.map-mode-map .map-panel .map-canvas{min-height:clamp(380px,72svh,720px)}.map-canvas.with-results-panel .boundary-legend{max-width:calc(100% - 80px)}}
+@media(max-width:560px){.map-results-panel{top:auto;bottom:8px;left:8px;right:8px;width:auto;max-height:55%}.map-status-pill{left:8px;right:auto;bottom:24px}}
+.map-results-body .trip-plan-heading .eyebrow{display:none}
+/* A short wave over the item just selected on a map. */
+.map-select-pulse{pointer-events:none}
+.map-select-pulse span{position:absolute;inset:0;border:3px solid #2fbf86;border-radius:50%;box-shadow:0 0 0 1.5px rgba(255,255,255,.75),inset 0 0 0 1.5px rgba(255,255,255,.75),0 0 14px rgba(47,191,134,.6);opacity:0;animation:map-select-wave 1.2s ease-out 2}
+.map-select-pulse span:nth-child(2){animation-delay:.4s;animation-iteration-count:1}
+.map-select-pulse i{position:absolute;left:50%;top:50%;width:30px;height:30px;margin:-15px 0 0 -15px;border-radius:50%;background:rgba(47,191,134,.28);box-shadow:0 0 22px rgba(47,191,134,.85);animation:map-select-dot 2.4s ease-out forwards}
+@keyframes map-select-wave{from{transform:scale(.2);opacity:1}70%{opacity:.6}to{transform:scale(1);opacity:0}}
+@keyframes map-select-dot{0%{transform:scale(.6);opacity:0}15%{transform:scale(1.35);opacity:1}100%{transform:scale(1);opacity:0}}
+@media(prefers-reduced-motion:reduce){.map-select-pulse span{animation:none;opacity:.8;transform:scale(.5)}.map-select-pulse span:nth-child(2){display:none}.map-select-pulse i{animation:none;opacity:1}}

@@ -1,4 +1,3 @@
-import type { SourceView } from "@waypoint-ai/shared";
 import type { ConnectionState } from "../../shared/api/client";
 import type { ReconnectInfo } from "../../shared/api/assistantSocket";
 import { translate, type Language } from "../../shared/i18n";
@@ -30,37 +29,6 @@ export function formatChatDate(timestamp: number, language: Language): string {
 /** Milliseconds since a performance.now() mark; 0 without one. */
 export function elapsedSince(startedAt: number | null): number {
   return startedAt === null ? 0 : Math.max(0, Math.round(performance.now() - startedAt));
-}
-
-/** A date input's value as the start or end of that local day, in ISO form. */
-export function localDateBoundary(value: string, endOfDay: boolean): string {
-  return new Date(`${value}T${endOfDay ? "23:59:59.999" : "00:00:00"}`).toISOString();
-}
-
-export function invalidDateRange(from: string, to: string): boolean {
-  return Boolean(from && to && from > to);
-}
-
-/** The filters the server applied to the last answer, as short labels. */
-export function formatAppliedFilters(filters: Array<Record<string, unknown>>, sources: SourceView[], language: Language): string[] {
-  const ru = language === "ru";
-  const de = language === "de";
-  const sourceNames = new Map(sources.map((source) => [source.id, source.label]));
-  return filters.flatMap((filter) => {
-    if (filter.key === "sourceIds" && Array.isArray(filter.value)) {
-      const names = filter.value.filter((id): id is string => typeof id === "string").map((id) => sourceNames.get(id) ?? id);
-      return names.length ? [`${ru ? "Источники" : de ? "Quellen" : "Sources"}: ${names.join(", ")}`] : [];
-    }
-    if (filter.key === "dateRange" && filter.value && typeof filter.value === "object") {
-      const range = filter.value as { from?: unknown; to?: unknown };
-      const locale = ru ? "ru-RU" : de ? "de-DE" : "en-US";
-      const from = typeof range.from === "string" ? new Date(range.from).toLocaleDateString(locale) : "…";
-      const to = typeof range.to === "string" ? new Date(range.to).toLocaleDateString(locale) : "…";
-      return [`${ru ? "Период" : de ? "Zeitraum" : "Date range"}: ${from} — ${to}`];
-    }
-    if (filter.key === "category" && typeof filter.value === "string") return [`${ru ? "Категория" : de ? "Kategorie" : "Category"}: ${filter.value}`];
-    return [];
-  });
 }
 
 export function connectionLabel(connection: ConnectionState, reconnect: ReconnectInfo, language: Language): string {

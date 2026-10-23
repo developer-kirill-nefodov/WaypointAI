@@ -33,13 +33,14 @@ export default function RouteLayer({ points, retryKey, onState }: { points: Rout
   return null;
 }
 
-export function RouteGeometry({ plan, points, color = "#41cda0" }: { plan: RoutePlan | null; points: RoutePoint[]; color?: string }) {
+/** The road route with its numbered stops; a click on a stop selects that place (the number lies over its marker). */
+export function RouteGeometry({ plan, points, color = "#41cda0", onSelect }: { plan: RoutePlan | null; points: RoutePoint[]; color?: string; onSelect?: (id: string) => void }) {
   if (!plan || points.length < 2) return null;
   const positions = plan.geometry.coordinates.map(([lon, lat]) => [lat, lon] as LatLngExpression);
   return <>
     <Polyline positions={positions} pathOptions={{ color: "#081b2c", opacity: 0.88, weight: 9, lineCap: "round", lineJoin: "round" }} />
     <Polyline positions={positions} pathOptions={{ color, opacity: 0.96, weight: 5, lineCap: "round", lineJoin: "round" }} />
-    {points.map((point, index) => <Marker key={`${point.id}:${index}`} position={[point.lat, point.lon]} icon={routeStopIcon(index + 1)} zIndexOffset={900}>
+    {points.map((point, index) => <Marker key={`${point.id}:${index}`} position={[point.lat, point.lon]} icon={routeStopIcon(index + 1)} zIndexOffset={900} eventHandlers={onSelect ? { click: () => onSelect(point.id) } : undefined}>
       <Tooltip direction="top" offset={[0, -14]}>
         <span>{index + 1}. {point.name}</span>
       </Tooltip>

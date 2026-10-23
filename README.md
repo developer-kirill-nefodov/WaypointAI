@@ -29,6 +29,7 @@ The model runs through a locally managed Ollama service. It can request a small 
 - A **Data** page to explore, import, and delete datasets: every record page by page beside a map, countries and cities, and the import history.
 - A **Model** page (`/model`) to measure and improve the assistant: a benchmark generated from the local database, a journal of chat turns with failure signals, LoRA fine-tuning of a small router model with live stages, an optional OpenAI *teacher* that writes training examples in reviewed batches, export and import of trained models, and prompt lessons. See [Training](#training-benchmark-journal-fine-tuning).
 - A live chat: each answer is a card with the model that wrote it, the time, what it put on the map, sources, and its steps; while a turn runs, the card shows every step with a timer in tenths of a second and the model's tokens per second.
+- Follow-up suggestions written by the local model right after each answer, about the same city, plan, or earthquakes. When a detail is missing (the period of an earthquake search, the days and route of a trip), the assistant asks with one-time filters in the conversation; the chosen values apply to that request only and stay on it as labels.
 
 The included OpenStreetMap extracts cover selected regions in Germany, Poland, Romania, France, Italy, and Spain; coverage is not complete in every country. Event records are imported on demand from INGV and USGS; an optional synthetic event set for offline demos is clearly labelled.
 

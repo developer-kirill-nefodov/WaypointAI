@@ -17,7 +17,8 @@ const SLOW_HINT_MS = 10_000;
 
 export function UserBubble({ message, language }: { message: Message; language: Language }) {
   return <article className="message user">
-    <p>{message.text}</p>
+    {message.tagsOnly ? <span className="message-tags-label">{makeT(language)("Уточнение", "Details")}</span> : <p>{message.text}</p>}
+    {message.tags?.length ? <div className="message-tags">{message.tags.map((tag) => <span key={tag}>{tag}</span>)}</div> : null}
     {message.at && <time className="message-time" dateTime={new Date(message.at).toISOString()}>{formatClock(message.at, language)}</time>}
   </article>;
 }
@@ -57,6 +58,10 @@ export interface AnswerCardProps {
   sources?: ReactNode;
   /** Rating buttons for answers the journal keeps. */
   feedback?: ReactNode;
+  /** The one-time filters of a clarification, while it waits for its answer. */
+  form?: ReactNode;
+  /** Follow-up requests under the latest answer. */
+  followUps?: ReactNode;
   pending: boolean;
   /** Fits the map to this answer's result; only the latest answer's result is on the map. */
   onShowOnMap?: () => void;
@@ -64,7 +69,7 @@ export interface AnswerCardProps {
   onRetry?: (query: string) => void;
 }
 
-export function AnswerCard({ message, language, body, sources, feedback, pending, onShowOnMap, onChoice, onRetry }: AnswerCardProps) {
+export function AnswerCard({ message, language, body, sources, feedback, form, followUps, pending, onShowOnMap, onChoice, onRetry }: AnswerCardProps) {
   const t = makeT(language);
   const [copied, setCopied] = useState(false);
   const kind = message.kind ?? "answer";
@@ -93,6 +98,7 @@ export function AnswerCard({ message, language, body, sources, feedback, pending
   return <article className={`message assistant answer-card${kind === "clarification" ? " answer-clarification" : ""}`}>
     <CardHead language={language} models={message.models} at={message.at} />
     <div className="message-content">{body}</div>
+    {form}
     {message.choices?.length ? <div className="clarification-choices">{message.choices.map((choice) => <button key={choice.id} type="button" disabled={pending} onClick={() => onChoice(choice.label)}>{choice.label}</button>)}</div> : null}
     {summary && (onShowOnMap
       ? <button type="button" className="answer-result" onClick={onShowOnMap}><MapPinned size={13} />{t("На карте", "On the map")}: {summary}<span aria-hidden="true">›</span></button>
@@ -106,6 +112,7 @@ export function AnswerCard({ message, language, body, sources, feedback, pending
         {feedback}
       </span>
     </footer>
+    {followUps}
   </article>;
 }
 

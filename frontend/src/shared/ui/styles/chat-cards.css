@@ -48,3 +48,29 @@
 .message-time{justify-self:end;color:#8aa09a;font-size:9.5px;font-variant-numeric:tabular-nums}
 @media(max-width:560px){.answer-head,.answer-live-status{font-size:12px}.answer-actions{font-size:11px}.answer-result{font-size:12px}.message-time{font-size:10.5px}}
 @media (prefers-reduced-motion:reduce){.answer-skeleton span{animation:none}.answer-live .message-content.streaming::after{animation:none}}
+/* Follow-up requests under the latest answer, written by the model (placeholders while it writes them). */
+.follow-ups{display:flex;flex-wrap:wrap;gap:6px;padding-top:8px;border-top:1px dashed #2a3c3f}
+.follow-up{display:inline-flex;align-items:center;gap:6px;max-width:100%;min-height:30px;padding:5px 10px;border:1px solid #33504a;border-radius:999px;background:#1a2d2c;color:#d4e6df;font:inherit;font-size:11px;cursor:pointer;transition:border-color .15s,background .15s}
+.follow-up span{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.follow-up svg{flex:0 0 auto;color:var(--mint)}
+.follow-up:hover:not(:disabled){border-color:#6fc79d;background:#203a35;color:#f0fff8}
+.follow-up:disabled{opacity:.55;cursor:not-allowed}
+.follow-up-skeleton{display:block;width:120px;height:30px;border-radius:999px;background:linear-gradient(90deg,#1b2b2d 0,#26393a 50%,#1b2b2d 100%) 0 0/200% 100%;animation:follow-up-shimmer 1.3s linear infinite}
+.follow-up-skeleton:nth-child(2){width:150px}.follow-up-skeleton:nth-child(3){width:96px}
+@keyframes follow-up-shimmer{to{background-position:-200% 0}}
+/* One-time filters of a clarification. */
+.clarify-form{display:grid;gap:9px;padding:10px;border:1px solid #33504a;border-radius:11px;background:#152325}
+.clarify-field{display:grid;gap:5px}
+.clarify-label{display:flex;align-items:baseline;gap:6px;color:#9fb3b0;font-size:10px;font-weight:600;letter-spacing:.3px;text-transform:uppercase}
+.clarify-label small{color:#6f8584;font-size:9px;font-weight:500;letter-spacing:0;text-transform:none}
+.clarify-options{display:flex;flex-wrap:wrap;gap:5px}
+.clarify-options button{display:inline-flex;align-items:center;gap:4px;min-height:28px;padding:4px 10px;border:1px solid #33494b;border-radius:8px;background:#1b2a2f;color:#c9d8d4;font:inherit;font-size:11px;cursor:pointer}
+.clarify-options button.on{border-color:#6fc79d;background:#21403a;color:#effff6}
+.clarify-options button:hover:not(:disabled):not(.on){border-color:#547765}
+.clarify-options button:disabled,.clarify-submit:disabled{opacity:.55;cursor:not-allowed}
+.clarify-submit{display:inline-flex;align-items:center;justify-self:start;gap:6px;min-height:32px;padding:6px 14px;border:0;border-radius:9px;background:var(--mint);color:#12241f;font:inherit;font-size:11px;font-weight:700;cursor:pointer}
+/* Labels of the filters chosen for a message. */
+.message-tags{display:flex;flex-wrap:wrap;gap:4px;margin-top:5px}
+.message-tags span{padding:2px 7px;border:1px solid #4b6a62;border-radius:999px;background:#1f3333;color:#bfe7d3;font-size:10px}
+@media(prefers-reduced-motion:reduce){.follow-up-skeleton{animation:none}}
+.message-tags-label{color:#9fd8bd;font-size:10px;font-weight:700;letter-spacing:.4px;text-transform:uppercase}

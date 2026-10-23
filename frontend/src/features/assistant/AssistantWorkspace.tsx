@@ -1,7 +1,7 @@
 import { lazy, Suspense, useCallback, useEffect, useRef, useState } from "react";
 import { Activity, MapPin, MessageSquare } from "lucide-react";
-import type { Citation, PlaceView, RecordView, Scope, SourceView, TripPlan, SearchArea } from "@waypoint-ai/shared";
-import MapPanel, { type MapLayers } from "../../widgets/map/MapPanel";
+import type { Citation, ClarificationAnswer, PlaceView, RecordView, SourceView, SuggestedRequest, TripPlan, SearchArea } from "@waypoint-ai/shared";
+import MapPanel, { type MapLayers, type PulseRequest } from "../../widgets/map/MapPanel";
 import { EMPTY_SCENE, type MapScene } from "../../widgets/map/map-scene";
 import { useCachedQuery } from "../../shared/data-cache";
 import { eventQueryParams, searchEvents } from "../../shared/api/investigations";
@@ -18,16 +18,19 @@ import ImportLayer from "../imports/ImportLayer";
 import { importStore } from "../imports/import-store";
 import HomeDashboard from "./HomeDashboard";
 import { compactResult, lastUserMessage, readSavedConversation, writeSavedConversation, type ChatResult, type Message, type SavedChat, type TurnStep } from "./chat-storage";
-import { connectionLabel, conversationTitle, elapsedSince, endStreaming, formatAppliedFilters, invalidDateRange, joinDraft, localDateBoundary, welcomeMessage } from "./chat-utils";
+import { connectionLabel, conversationTitle, elapsedSince, endStreaming, joinDraft, welcomeMessage } from "./chat-utils";
 import { applyProgressFrame, applyStepFrame, finishSteps } from "./turn-steps";
 import { useAppNavigation } from "./useAppNavigation";
 import { useChatScroll } from "./useChatScroll";
-import { ChatComposer, ChatFilters, ChatHeader, SuggestionsPanel } from "./ChatControls";
+import { ChatComposer, ChatHeader } from "./ChatControls";
+import { ClarificationForm, SuggestionChips } from "./ChatFollowUps";
 import { AnswerCard, LiveTurnCard, UserBubble } from "./ChatCards";
 import CitationList from "./CitationList";
-import { contextSuggestions, rotateSuggestions, starterSuggestions } from "./suggestions";
+import { contextSuggestions, starterSuggestions } from "./suggestions";
 
 const MarkdownMessage = lazy(() => import("./MarkdownMessage"));
+/** The server gives up on follow-ups after 45 s; the client waits a little longer before showing its own. */
+const FOLLOW_UPS_WAIT_MS = 50_000;
 // The events and places modes of the map page and the other pages load on first use, so they do not grow the
 // initial bundle.
 const EventsPanel = lazy(() => import("../investigation/EventsPanel"));
@@ -46,7 +49,6 @@ export default function AssistantWorkspace() {
   const [savedConversation] = useState(() => readSavedConversation(welcomeMessage(language)));
   const socketRef = useRef<WebSocket | null>(null);
   const requestStartedAtRef = useRef<number | null>(null);
-  const sourcesRef = useRef<SourceView[]>([]);
   const [capabilities, setCapabilities] = useState<Capabilities | null>(null);
   const [connection, setConnection] = useState<ConnectionState>("connecting");
   const [reconnectInfo, setReconnectInfo] = useState<ReconnectInfo>(null);
@@ -71,7 +73,6 @@ export default function AssistantWorkspace() {
   const voiceBaseDraftRef = useRef("");
   const applyVoiceTranscript = useCallback((transcript: string) => {
     setDraft(joinDraft(voiceBaseDraftRef.current, transcript));
-    setSuggestionOffset(0);
   }, []);
   const voice = useVoiceInput({ socketRef, connection, language, onTranscript: applyVoiceTranscript });
   const voiceFrameHandlerRef = useRef(voice.handleFrame);
@@ -82,9 +83,6 @@ export default function AssistantWorkspace() {
   const [sources, setSources] = useState<SourceView[]>([]);
   const [sourcesLoading, setSourcesLoading] = useState(true);
   const [sourceLoadFailed, setSourceLoadFailed] = useState(false);
-  const [selectedSourceIds, setSelectedSourceIds] = useState<string[]>([]);
-  const [fromDate, setFromDate] = useState("");
-  const [toDate, setToDate] = useState("");
   const [appliedFilters, setAppliedFilters] = useState<Array<Record<string, unknown>>>(savedConversation.result?.appliedFilters ?? []);
   const [resultSources, setResultSources] = useState<SourceView[]>(savedConversation.result?.sources ?? []);
   const [mapPlaces, setMapPlaces] = useState<PlaceView[]>(savedConversation.result?.places ?? []);
@@ -100,14 +98,20 @@ export default function AssistantWorkspace() {
   const eventsSelectRef = useRef<((key: string) => void) | null>(null);
   const placesSelectRef = useRef<((key: string) => void) | null>(null);
   const [mapLayers, setMapLayers] = useState<MapLayers>({ places: true, events: false });
+  const [citationPulse, setCitationPulse] = useState<PulseRequest | null>(null);
   const [resetViewportRevision, setResetViewportRevision] = useState(0);
   const [lastSubmittedQuery, setLastSubmittedQuery] = useState(() => lastUserMessage(savedConversation.messages));
   // The request whose result is on the map, shown above it; the map keeps it while the next turn runs.
   const [resultQuery, setResultQuery] = useState(() => savedConversation.result ? lastUserMessage(savedConversation.messages) : "");
   const submittedQueryRef = useRef("");
-  const [suggestionOffset, setSuggestionOffset] = useState(0);
-  const [filtersExpanded, setFiltersExpanded] = useState(false);
-  const [suggestionsExpanded, setSuggestionsExpanded] = useState(false);
+  // Follow-up requests of the latest answer, written by the model right after it; null when none are coming.
+  const [followUps, setFollowUps] = useState<{ requestId: string; status: "loading" | "none" } | null>(null);
+  // The server always answers, but a dropped connection would leave the placeholders; they give way after a while.
+  useEffect(() => {
+    if (followUps?.status !== "loading") return;
+    const timer = window.setTimeout(() => setFollowUps((current) => current?.status === "loading" ? { ...current, status: "none" } : current), FOLLOW_UPS_WAIT_MS);
+    return () => window.clearTimeout(timer);
+  }, [followUps]);
   const chatScroll = useChatScroll({ visible: activePage === "workspace" && mapMode === "assistant", chatId: localChatId, changes: [messages, pending, progressLabel] });
   usePopoverDismiss();
 
@@ -118,7 +122,6 @@ export default function AssistantWorkspace() {
     loadCapabilities(abort.signal).then(setCapabilities).catch(() => setCapabilities(null));
     loadDataSources(abort.signal).then((loadedSources) => {
       if (abort.signal.aborted) return;
-      sourcesRef.current = loadedSources;
       setSources(loadedSources);
       setSourceLoadFailed(false);
     }).catch(() => { if (!abort.signal.aborted) setSourceLoadFailed(true); }).finally(() => { if (!abort.signal.aborted) setSourcesLoading(false); });
@@ -183,7 +186,7 @@ export default function AssistantWorkspace() {
           case "turn.clarification": {
             const { durationMs, steps } = endTurn();
             setConversationId(frame.conversationId);
-            setMessages((current) => [...endStreaming(current), { role: "assistant", kind: "clarification", text: frame.message, choices: frame.choices, durationMs, steps, at: Date.now() }]);
+            setMessages((current) => [...endStreaming(current), { role: "assistant", kind: "clarification", text: frame.message, choices: frame.choices, ...(frame.fields?.length ? { fields: frame.fields } : {}), durationMs, steps, at: Date.now() }]);
             break;
           }
           case "turn.cancelled": {
@@ -203,7 +206,6 @@ export default function AssistantWorkspace() {
             setSelectedResultKey(null);
             setAppliedFilters(frame.appliedFilters);
             setResultSources(frame.sources);
-            setSuggestionOffset(0);
             const result = { places: frame.result.places?.length ?? 0, records: frame.result.records.length, tripDays: frame.result.tripPlan?.totalDays ?? null };
             const reply: Message = {
               role: "assistant", kind: "answer", text: frame.assistantMessage, durationMs, steps, requestId: frame.requestId, at: Date.now(),
@@ -213,6 +215,14 @@ export default function AssistantWorkspace() {
             };
             // The streamed text is replaced by the final message, which is the authoritative version.
             setMessages((current) => current.at(-1)?.streaming ? [...current.slice(0, -1), reply] : [...current, reply]);
+            // The model writes follow-up requests next; until they come, the answer shows placeholders.
+            setFollowUps({ requestId: frame.requestId, status: "loading" });
+            break;
+          }
+          case "turn.suggestions": {
+            const suggestions = frame.suggestions;
+            setFollowUps((current) => current?.requestId === frame.requestId ? (suggestions.length ? null : { requestId: frame.requestId, status: "none" }) : current);
+            if (suggestions.length) setMessages((current) => current.map((message) => message.requestId === frame.requestId ? { ...message, suggestions } : message));
             break;
           }
         }
@@ -255,8 +265,9 @@ export default function AssistantWorkspace() {
     voiceFrameHandlerRef.current = voice.handleFrame;
   }, [voice.handleFrame]);
 
-  // Background events layer of the assistant map: the last week, up to one page.
-  const eventsLayer = useCachedQuery(mapMode === "assistant" && mapLayers.events ? "map:events-layer" : null, () => searchEvents(eventQueryParams({ days: 7, minMagnitude: null, sourceIds: [], near: null, limit: 200 })), 5 * 60_000);
+  // Background events layer of the assistant map: the last week, up to one page. It stays loaded while another mode
+  // is shown, so the kept-alive map does not redraw its markers on the way back.
+  const eventsLayer = useCachedQuery(visitedModes.has("assistant") && mapLayers.events ? "map:events-layer" : null, () => searchEvents(eventQueryParams({ days: 7, minMagnitude: null, sourceIds: [], near: null, limit: 200 })), 5 * 60_000);
   const sourceLabels = Object.fromEntries(sources.map((source) => [source.id, source.label]));
   // A citation can be shown on the map only while its row is among the results there (older answers' rows are not).
   const citationOnMap = (citation: Citation) => citation.entityType === "place"
@@ -265,7 +276,10 @@ export default function AssistantWorkspace() {
   const showCitation = (citation: Citation) => {
     if (!citationOnMap(citation)) return;
     setMapMode("assistant");
-    setSelectedResultKey(`${citation.entityType}:${citation.id}`);
+    const key = `${citation.entityType}:${citation.id}`;
+    setSelectedResultKey(key);
+    // A citation clicked again waves over its row on the map again.
+    setCitationPulse({ key, revision: performance.now() });
   };
   /** Starts a question about a place or event: it becomes the selected map point and a ready question is offered. */
   const askAbout = useCallback(({ place, record }: { place?: PlaceView; record?: RecordView }) => {
@@ -314,9 +328,12 @@ export default function AssistantWorkspace() {
     if (!saved) setHistoryClearWarning(translate(language, "Не удалось сохранить переписку в браузере.", "Could not save the conversation in this browser."));
   }, [conversationId, localChatId, messages, recentChats, language, resultsLoaded, mapPlaces, mapRecords, tripPlan, searchArea]);
 
-  /** Sends a message as the next turn; false when it cannot be sent now. */
-  function send(message: string): boolean {
-    if (!message || pending || voice.state !== "idle" || invalidDateRange(fromDate, toDate) || socketRef.current?.readyState !== WebSocket.OPEN) return false;
+  /**
+   * Sends a message as the next turn; false when it cannot be sent now. `answers` are the one-time filters chosen in
+   * a clarification: they apply to this turn only, and their labels stay on the message.
+   */
+  function send(message: string, answered?: { answers: ClarificationAnswer[]; tags: string[]; display?: string }): boolean {
+    if (!message || pending || voice.state !== "idle" || socketRef.current?.readyState !== WebSocket.OPEN) return false;
     const selectedMapItem = selectedResultKey?.startsWith("place:")
       ? { type: "place" as const, id: selectedResultKey.slice("place:".length) }
       : selectedResultKey?.startsWith("record:")
@@ -325,7 +342,6 @@ export default function AssistantWorkspace() {
     const requestId = crypto.randomUUID();
     setLastSubmittedQuery(message);
     submittedQueryRef.current = message;
-    setSuggestionOffset(0);
     // The current result (a trip plan above all) stays on the map while the next turn runs; a completed turn
     // replaces it, and a clarifying question, an error, or a cancel leaves it as it was.
     setSelectedResultKey(null);
@@ -336,26 +352,37 @@ export default function AssistantWorkspace() {
     setProgressLabel(translate(language, "Отправляю запрос на локальный сервер", "Sending request to the local server"));
     turnStepsRef.current = [];
     setTurnSteps([]);
-    const dateRange: Scope["dateRange"] = fromDate || toDate ? {
-      ...(fromDate ? { from: localDateBoundary(fromDate, false) } : {}),
-      ...(toDate ? { to: localDateBoundary(toDate, true) } : {}),
-    } : null;
+    setFollowUps(null);
     chatScroll.follow();
-    setMessages((current) => [...current, { role: "user", text: message, at: Date.now() }]);
+    setMessages((current) => [...current, {
+      role: "user", text: answered ? answered.display || message : message, at: Date.now(),
+      ...(answered?.tags.length ? { tags: answered.tags, ...(answered.display ? {} : { tagsOnly: true }) } : {}),
+    }]);
     socketRef.current.send(JSON.stringify({
       protocolVersion: 1,
       type: "turn.submit",
       requestId,
       conversationId,
       message,
-      scope: { workspaceId: "demo", sourceIds: selectedSourceIds, polygonIds: [], dateRange, language, ...(selectedMapItem ? { selectedMapItem } : {}) },
+      scope: { workspaceId: "demo", sourceIds: [], polygonIds: [], dateRange: null, language, ...(selectedMapItem ? { selectedMapItem } : {}) },
+      ...(answered?.answers.length ? { answers: answered.answers } : {}),
     }));
     return true;
   }
 
+  /**
+   * Answers the clarification at `index` with its filters. The request it asked about is sent again with them, so the
+   * turn stands on its own (the server adds the chosen details to it); words typed in the composer go along.
+   */
+  function answerClarification(index: number, answers: ClarificationAnswer[], tags: string[], fallback: string) {
+    const asked = messages.slice(0, index).reverse().find((message) => message.role === "user");
+    const typed = draft.trim();
+    const request = [asked?.text, typed].filter(Boolean).join("\n") || fallback;
+    if (send(request, { answers, tags, ...(typed ? { display: typed } : {}) })) setDraft("");
+  }
+
   function updateDraft(value: string) {
     setDraft(value);
-    setSuggestionOffset(0);
   }
 
   function startVoiceInput() {
@@ -365,13 +392,23 @@ export default function AssistantWorkspace() {
 
   function chooseReply(prompt: string) {
     setDraft(prompt);
-    setSuggestionOffset(0);
     composerRef.current?.focus();
   }
 
-  const activeSuggestions = lastSubmittedQuery
-    ? contextSuggestions({ query: lastSubmittedQuery, places: mapPlaces, records: mapRecords, tripPlan, searchArea }, language)
-    : starterSuggestions(language, localChatId);
+  /**
+   * The follow-ups under the latest answer: the model's, placeholders while it writes them, or, when it wrote none
+   * (or after a reload), requests built from what is on the map. A new chat offers starter requests.
+   */
+  function followUpsFor(message: Message, index: number): { items: SuggestedRequest[]; loading: boolean } | null {
+    if (pending || index !== messages.length - 1 || message.role !== "assistant") return null;
+    if (message.kind && message.kind !== "answer") return null;
+    if (message.suggestions?.length) return { items: message.suggestions, loading: false };
+    if (followUps?.status === "loading" && followUps.requestId === message.requestId) return { items: [], loading: true };
+    const fallback = lastSubmittedQuery
+      ? contextSuggestions({ query: lastSubmittedQuery, places: mapPlaces, records: mapRecords, tripPlan, searchArea }, language)
+      : starterSuggestions(language, localChatId);
+    return { items: fallback.slice(0, 3), loading: false };
+  }
 
   function cancelRequest() {
     const requestId = activeRequestId;
@@ -396,10 +433,8 @@ export default function AssistantWorkspace() {
   function resetConversation() {
     setMessages([welcomeMessage(language)]);
     setDraft("");
-    setSuggestionsExpanded(false);
     showResult(null);
     setLastSubmittedQuery("");
-    setSuggestionOffset(0);
   }
 
   function startNewConversation() {
@@ -436,11 +471,9 @@ export default function AssistantWorkspace() {
     setConversationId(selected.conversationId);
     setMessages(selected.messages);
     setLastSubmittedQuery(lastUserMessage(selected.messages));
-    setSuggestionsExpanded(false);
     setDraft("");
     showResult(selected.result, lastUserMessage(selected.messages));
     setResetViewportRevision((revision) => revision + 1);
-    setSuggestionOffset(0);
   }
 
   async function resetHistory() {
@@ -466,7 +499,6 @@ export default function AssistantWorkspace() {
   const t = (ru: string, en: string) => translate(language, ru, en);
   const voiceStatus = voiceStatusText(language, voice.state, voice.issue);
   const statusText = status === "ready" ? translate(language, "Модель готова", "Model ready") : status === "data_unavailable" ? translate(language, "База недоступна", "Database unavailable") : status === "model_unavailable" ? translate(language, "Модель не подключена", "Model unavailable") : translate(language, "AI-обработчик не подключён", "AI service starting");
-  const dateRangeInvalid = invalidDateRange(fromDate, toDate);
   const conversationName = conversationTitle(messages, language);
 
   const streamingText = pending && messages.at(-1)?.streaming ? messages.at(-1)!.text : "";
@@ -510,19 +542,6 @@ export default function AssistantWorkspace() {
             </div>
             <div className="map-mode-pane chat-pane" hidden={mapMode !== "assistant"}>
               <ChatHeader language={language} title={conversationName} busy={pending || historyResetPending} recentChats={recentChats} resultSources={resultSources} onNewChat={startNewConversation} onOpenChat={openRecentChat} onResetHistory={() => void resetHistory()} />
-              <ChatFilters
-                language={language}
-                expanded={filtersExpanded}
-                onToggle={() => setFiltersExpanded((open) => !open)}
-                sources={sources}
-                sourcesFailed={sourceLoadFailed}
-                databaseUnavailable={capabilities?.assistantStatus === "data_unavailable"}
-                filters={{ selectedSourceIds, fromDate, toDate }}
-                onSources={setSelectedSourceIds}
-                onFromDate={setFromDate}
-                onToDate={setToDate}
-                dateRangeInvalid={dateRangeInvalid}
-              />
               <div className="messages-scroll-frame">
                 <div className="messages" ref={chatScroll.viewportRef} onScroll={chatScroll.onScroll} tabIndex={0} aria-label={t("Сообщения чата", "Chat messages")}>
                   {messages.map((message, index) => {
@@ -539,6 +558,10 @@ export default function AssistantWorkspace() {
                       pending={pending}
                       onShowOnMap={index === lastResultIndex && resultsLoaded ? () => setResetViewportRevision((revision) => revision + 1) : undefined}
                       onChoice={(label) => { setDraft(label); composerRef.current?.focus(); }}
+                      form={message.kind === "clarification" && message.fields?.length && index === messages.length - 1
+                        ? <ClarificationForm key={`${index}-form`} fields={message.fields} language={language} disabled={pending || connection !== "connected"} onSubmit={(answers, tags, text) => { answerClarification(index, answers, tags, text); }} />
+                        : undefined}
+                      followUps={(() => { const followUp = followUpsFor(message, index); return followUp ? <SuggestionChips items={followUp.items} loading={followUp.loading} language={language} disabled={pending} onChoose={chooseReply} /> : undefined; })()}
                       onRetry={(query) => { send(query); }}
                     />;
                   })}
@@ -548,16 +571,6 @@ export default function AssistantWorkspace() {
                 <div className="chat-edge-fade chat-edge-fade-bottom" aria-hidden="true" />
               </div>
               {historyClearWarning && <div className="history-warning" role="status">{historyClearWarning}</div>}
-              {appliedFilters.length > 0 && <div className="applied-filters" aria-label={t("Применённые сервером фильтры", "Filters applied by the server")}>{formatAppliedFilters(appliedFilters, sourcesRef.current, language).map((filter) => <span key={filter}>{filter}</span>)}</div>}
-              <SuggestionsPanel
-                language={language}
-                expanded={suggestionsExpanded}
-                onToggle={() => setSuggestionsExpanded((open) => !open)}
-                total={activeSuggestions.length}
-                visible={rotateSuggestions(activeSuggestions, suggestionOffset)}
-                onMore={() => setSuggestionOffset((offset) => (offset + 1) % activeSuggestions.length)}
-                onChoose={chooseReply}
-              />
               <ChatComposer
                 language={language}
                 composerRef={composerRef}
@@ -565,7 +578,7 @@ export default function AssistantWorkspace() {
                 onDraft={updateDraft}
                 onSubmit={() => { if (send(draft.trim())) setDraft(""); }}
                 dictating={voice.state !== "idle"}
-                canSend={Boolean(draft.trim()) && !pending && voice.state === "idle" && !dateRangeInvalid && connection === "connected"}
+                canSend={Boolean(draft.trim()) && !pending && voice.state === "idle" && connection === "connected"}
                 statusText={voiceStatus ?? t("Данные обрабатываются локально", "Data is processed locally")}
                 statusClass={voiceStatus ? `voice-status ${voice.state}${voice.issue ? " issue" : ""}` : undefined}
                 pending={pending}
@@ -585,9 +598,17 @@ export default function AssistantWorkspace() {
             </div>}
           </section>
 
-          {mapMode === "assistant" ? <MapPanel language={language} heading={resultsLoaded && resultQuery ? { eyebrow: tripPlan ? t("ПЛАН ПОЕЗДКИ · ПО ЗАПРОСУ", "TRIP PLAN · FROM THE REQUEST") : mapRecords.length ? t("СОБЫТИЯ · ПО ЗАПРОСУ", "EVENTS · FROM THE REQUEST") : t("МЕСТА · ПО ЗАПРОСУ", "PLACES · FROM THE REQUEST"), title: resultQuery } : undefined} pinned={pinned} overlayRecords={mapLayers.events ? eventsLayer.data?.events ?? [] : []} layers={mapLayers} onLayers={setMapLayers} onAsk={askAboutSelection} highlights={mapPlaces} records={mapRecords} tripPlan={tripPlan} radius={searchArea} sourceIds={selectedSourceIds} selectedResultKey={selectedResultKey} onSelectResult={setSelectedResultKey} sourceLabels={sourceLabels} sourceDates={Object.fromEntries(sources.flatMap((source) => source.snapshotDate ? [[source.id, source.snapshotDate]] : []))} resultsLoaded={resultsLoaded} resetViewportRevision={resetViewportRevision} />
-            : mapMode === "events" ? <MapPanel language={language} variant="investigation" heading={{ eyebrow: t("СОБЫТИЯ · OPENSTREETMAP", "EVENTS · OPENSTREETMAP"), title: t("События и места рядом", "Events and nearby places") }} records={eventsScene.records} recordSourceModes={eventsScene.recordSourceModes} highlights={eventsScene.highlights} radius={eventsScene.radius} focus={eventsScene.focus} selectedResultKey={eventsScene.selectedKey} onSelectResult={(key) => eventsSelectRef.current?.(key)} sourceLabels={eventsScene.sourceLabels} resultsLoaded={eventsScene.resultsLoaded} />
-              : <MapPanel language={language} variant="investigation" fit="results" heading={{ eyebrow: t("МЕСТА · OPENSTREETMAP", "PLACES · OPENSTREETMAP"), title: t("Каталог мест", "Place catalog") }} highlights={placesScene.highlights} selectedResultKey={placesScene.selectedKey} onSelectResult={(key) => placesSelectRef.current?.(key)} sourceLabels={sourceLabels} resultsLoaded={placesScene.resultsLoaded} />}
+          {/* Each mode keeps its own map: switching shows another Leaflet instance with its view and layers intact
+              instead of redrawing one map with another mode's results. */}
+          {visitedModes.has("assistant") && <div className="map-mode-map" hidden={mapMode !== "assistant"}>
+            <MapPanel language={language} heading={resultsLoaded && resultQuery ? { eyebrow: tripPlan ? t("ПЛАН ПОЕЗДКИ · ПО ЗАПРОСУ", "TRIP PLAN · FROM THE REQUEST") : mapRecords.length ? t("СОБЫТИЯ · ПО ЗАПРОСУ", "EVENTS · FROM THE REQUEST") : t("МЕСТА · ПО ЗАПРОСУ", "PLACES · FROM THE REQUEST"), title: resultQuery } : undefined} pinned={pinned} overlayRecords={mapLayers.events ? eventsLayer.data?.events ?? [] : []} layers={mapLayers} onLayers={setMapLayers} onAsk={askAboutSelection} highlights={mapPlaces} records={mapRecords} tripPlan={tripPlan} radius={searchArea} sourceIds={[]} selectedResultKey={selectedResultKey} onSelectResult={setSelectedResultKey} sourceLabels={sourceLabels} sourceDates={Object.fromEntries(sources.flatMap((source) => source.snapshotDate ? [[source.id, source.snapshotDate]] : []))} resultsLoaded={resultsLoaded} resetViewportRevision={resetViewportRevision} pulse={citationPulse} />
+          </div>}
+          {visitedModes.has("events") && <div className="map-mode-map" hidden={mapMode !== "events"}>
+            <MapPanel language={language} variant="investigation" heading={{ eyebrow: t("СОБЫТИЯ · OPENSTREETMAP", "EVENTS · OPENSTREETMAP"), title: t("События и места рядом", "Events and nearby places") }} records={eventsScene.records} recordSourceModes={eventsScene.recordSourceModes} highlights={eventsScene.highlights} radius={eventsScene.radius} focus={eventsScene.focus} selectedResultKey={eventsScene.selectedKey} onSelectResult={(key) => eventsSelectRef.current?.(key)} sourceLabels={eventsScene.sourceLabels} resultsLoaded={eventsScene.resultsLoaded} pulse={eventsScene.pulse} />
+          </div>}
+          {visitedModes.has("places") && <div className="map-mode-map" hidden={mapMode !== "places"}>
+            <MapPanel language={language} variant="investigation" fit="results" heading={{ eyebrow: t("МЕСТА · OPENSTREETMAP", "PLACES · OPENSTREETMAP"), title: t("Каталог мест", "Place catalog") }} highlights={placesScene.highlights} selectedResultKey={placesScene.selectedKey} onSelectResult={(key) => placesSelectRef.current?.(key)} sourceLabels={sourceLabels} resultsLoaded={placesScene.resultsLoaded} pulse={placesScene.pulse} />
+          </div>}
         </div>}
       </section>
       <ImportLayer language={language} />

@@ -3,6 +3,7 @@ import { useCallback, useEffect, useMemo, useState, type MutableRefObject } from
 import { ArrowRight } from "lucide-react";
 import { makeT, type Language } from "../../shared/i18n";
 import { navigateTo } from "../../shared/routing";
+import type { PulseRequest } from "../../widgets/map/MapPanel";
 import type { MapScene } from "../../widgets/map/map-scene";
 import { CatalogFilterBar, CatalogRows, CatalogStatus, PlaceCard, useCatalog, type Filters } from "../data/catalog";
 import type { CatalogPlace } from "../imports/import-api";
@@ -28,14 +29,20 @@ export default function PlacesPanel({ language, onScene, selectRef, onAsk }: Pla
   const onFilters = useCallback((change: Partial<Filters>) => setFilters((current) => ({ ...current, ...change })), []);
   const catalog = useCatalog(undefined, filters, onFilters);
   const [selectedId, setSelectedId] = useState<string | null>(null);
+  // Every pick in the list or on the map waves over the place, also when it is picked again.
+  const [pulse, setPulse] = useState<PulseRequest | null>(null);
+  const select = useCallback((id: string) => {
+    setPulse({ key: `place:${id}`, revision: performance.now() });
+    setSelectedId(id);
+  }, []);
   const highlights = useMemo(() => catalog.rows.map(toPlaceView), [catalog.rows]);
   useEffect(() => {
-    selectRef.current = (key: string) => { if (key.startsWith("place:")) setSelectedId(key.slice("place:".length)); };
+    selectRef.current = (key: string) => { if (key.startsWith("place:")) select(key.slice("place:".length)); };
     return () => { selectRef.current = null; };
-  }, [selectRef]);
+  }, [select, selectRef]);
   useEffect(() => {
-    onScene({ records: [], recordSourceModes: {}, highlights, radius: null, focus: null, selectedKey: selectedId ? `place:${selectedId}` : null, sourceLabels: {}, resultsLoaded: Boolean(catalog.first.data) });
-  }, [highlights, selectedId, catalog.first.data, onScene]);
+    onScene({ records: [], recordSourceModes: {}, highlights, radius: null, focus: null, selectedKey: selectedId ? `place:${selectedId}` : null, sourceLabels: {}, resultsLoaded: Boolean(catalog.first.data), pulse });
+  }, [highlights, selectedId, catalog.first.data, pulse, onScene]);
   // The chosen row scrolls into view when it was picked on the map.
   useEffect(() => {
     if (selectedId) document.querySelector(".places-panel .data-rows button.active")?.scrollIntoView({ block: "nearest" });
@@ -54,7 +61,7 @@ export default function PlacesPanel({ language, onScene, selectRef, onAsk }: Pla
         : <>
           <CatalogFilterBar language={language} catalog={catalog} onChange={() => setSelectedId(null)} />
           <CatalogStatus language={language} catalog={catalog} onChange={() => setSelectedId(null)} />
-          <CatalogRows language={language} catalog={catalog} selectedId={selectedId} onSelect={setSelectedId}
+          <CatalogRows language={language} catalog={catalog} selectedId={selectedId} onSelect={select}
             renderSelected={(place) => <PlaceCard language={language} place={place} floating={false} onClose={() => setSelectedId(null)} onAsk={(chosen) => onAsk(toPlaceView(chosen))} />} />
         </>}
   </div>;

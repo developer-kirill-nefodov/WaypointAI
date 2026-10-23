@@ -2,7 +2,7 @@ import type { EventDetailsResponse, InvestigationEvent, SourceView } from "@wayp
 import { RefreshCw } from "lucide-react";
 import { useCallback, useEffect, useMemo, useState, type MutableRefObject } from "react";
 import { makeT, type Language } from "../../shared/i18n";
-import type { SearchRadius } from "../../widgets/map/MapPanel";
+import type { PulseRequest, SearchRadius } from "../../widgets/map/MapPanel";
 import type { MapScene } from "../../widgets/map/map-scene";
 import ElapsedSeconds from "./ElapsedSeconds";
 import { errorMessage } from "./errors";
@@ -44,6 +44,8 @@ export default function EventsPanel({ language, onScene, selectRef, onAsk }: Eve
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [modalOpen, setModalOpen] = useState(false);
   const [mapFocus, setMapFocus] = useState<MapFocus | null>(null);
+  // Every pick in the list or on the map waves over the event, also when it is picked again.
+  const [pulse, setPulse] = useState<PulseRequest | null>(null);
 
   const sourcesState = useSources(reloadKey);
   const eventSearch = useEventSearch(filters, reloadKey);
@@ -52,6 +54,7 @@ export default function EventsPanel({ language, onScene, selectRef, onAsk }: Eve
   const selectedEvent = details.status === "ready" ? details.details.event : null;
 
   const openEvent = useCallback((id: string) => {
+    setPulse({ key: `record:${id}`, revision: performance.now() });
     setSelectedId(id);
     setMapFocus(null);
     setModalOpen(true);
@@ -80,6 +83,7 @@ export default function EventsPanel({ language, onScene, selectRef, onAsk }: Eve
   const showOnMap = (target: MapFocusTarget) => {
     setModalOpen(false);
     setMapFocus((current) => ({ ...target, revision: (current?.revision ?? 0) + 1 }));
+    setPulse({ key: `${target.kind}:${target.id}`, revision: performance.now() });
   };
   useEffect(() => {
     selectRef.current = (key: string) => { if (key.startsWith("record:")) openEvent(key.slice("record:".length)); };
@@ -107,8 +111,8 @@ export default function EventsPanel({ language, onScene, selectRef, onAsk }: Eve
   const selectedKey = mapFocus?.kind === "place" ? `place:${mapFocus.id}` : selectedEvent ? `record:${selectedEvent.id}` : null;
 
   useEffect(() => {
-    onScene({ records: events, recordSourceModes, highlights: linkedPlaces, radius, focus: mapFocus, selectedKey, sourceLabels, resultsLoaded: search.status === "ready" });
-  }, [events, recordSourceModes, linkedPlaces, radius, mapFocus, selectedKey, sourceLabels, search.status, onScene]);
+    onScene({ records: events, recordSourceModes, highlights: linkedPlaces, radius, focus: mapFocus, selectedKey, sourceLabels, resultsLoaded: search.status === "ready", pulse });
+  }, [events, recordSourceModes, linkedPlaces, radius, mapFocus, selectedKey, sourceLabels, search.status, pulse, onScene]);
 
   return (
     <div className="events-panel">

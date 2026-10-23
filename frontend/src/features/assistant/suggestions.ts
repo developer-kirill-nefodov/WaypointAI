@@ -202,12 +202,6 @@ function emptySuggestions(query: string, language: Language): SuggestedReply[] {
   ];
 }
 
-export function rotateSuggestions(suggestions: SuggestedReply[], offset: number): SuggestedReply[] {
-  if (suggestions.length <= 2) return suggestions;
-  const start = offset % suggestions.length;
-  return [suggestions[start]!, suggestions[(start + 1) % suggestions.length]!];
-}
-
 function strongestEvent(records: RecordView[]): { id: string; magnitude: number } | null {
   let best: { id: string; magnitude: number } | null = null;
   for (const record of records) {
