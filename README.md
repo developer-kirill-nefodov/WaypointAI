@@ -1,10 +1,17 @@
 # Waypoint AI
 
-Waypoint AI is a self-hosted map assistant built around one rule: **the model cannot invent a fact**. A local LLM turns natural-language requests into validated, read-only backend searches, and every place name, coordinate, and route on the map comes from verified database rows or the routing service. When the model is unavailable, a rule-based parser takes over and the UI says so.
+Waypoint AI is a self-hosted map assistant built around one rule: **the model cannot invent a fact**. A local LLM turns natural-language requests into validated, read-only backend searches, and every place name, coordinate, and route on the map comes from verified database rows or the routing service. Each fact in an answer cites the row it came from. When the model is unavailable, a rule-based parser takes over and the UI says so.
 
-It covers OpenStreetMap places, multi-city itineraries with road routes, and public earthquake data searched by place, radius, and period — all on one map with three modes: the assistant, events, and places.
+It covers OpenStreetMap places, multi-city itineraries with road routes, and earthquakes from two cross-checked catalogues (INGV and USGS), all on one map. Data is imported from inside the app. The assistant also improves in a loop you can measure: a benchmark generated from the database, a journal of failed turns, and LoRA fine-tuning of a small router model on a laptop. On the 142-question router benchmark, the fine-tuned Qwen3 0.6B scores 90%, the 4B main model 87%, and the untrained 0.6B 29%; the router takes 1.7 s per question, the 4B model 4.9 s.
 
-![Waypoint AI: the chat finds earthquakes within 60 km of Perugia and draws the search radius on the map](docs/media/waypoint-ai-route-chat.png)
+![Waypoint AI: the chat finds earthquakes within 50 km of Perugia, draws the radius on the map, lists the results in a panel, cites them as E1–E8, and suggests follow-up requests](docs/media/waypoint-ai-cover.png)
+
+| | |
+|---|---|
+| ![Two-day trip plan for Warsaw with a road route per day](docs/media/waypoint-ai-trip.png) | ![Clarification with one-time filters for an earthquake search](docs/media/waypoint-ai-clarification.png) |
+| Trip plan with a road route per day | A clarification with one-time filters |
+| ![One earthquake compared between the INGV and USGS catalogues](docs/media/waypoint-ai-cross-check.png) | ![Benchmark comparison of the fine-tuned router and the main model](docs/media/waypoint-ai-benchmark.png) |
+| The same earthquake in INGV and USGS | The fine-tuned router against the main model |
 
 [![CI](https://github.com/developer-kirill-nefodov/WaypointAI/actions/workflows/ci.yml/badge.svg)](https://github.com/developer-kirill-nefodov/WaypointAI/actions/workflows/ci.yml)
 
