@@ -143,6 +143,7 @@ function Capabilities({ language }: { language: Language }) {
     { icon: Radar, name: "search_events", description: t("Ищет землетрясения INGV и USGS у города или точки, по радиусу, периоду и магнитуде, с перекрёстной проверкой.", "Finds INGV and USGS earthquakes near a town or point by radius, period, and magnitude, cross-checked between catalogues.") },
     { icon: Route, name: "plan_trip", description: t("Составляет план поездки: модель называет города и дни, сервер находит их и подбирает точки.", "Plans a trip: the model names the cities and days; the server resolves them and picks the stops.") },
     { icon: Route, name: "edit_trip_plan", description: t("Меняет текущий план: добавляет, убирает и переносит точки и дни.", "Edits the current plan: adds, removes, and moves stops and days.") },
+    { icon: Route, name: "route_places", description: t("Строит маршрут на машине через места последнего поиска.", "Builds a driving route through the places of the latest search.") },
   ];
   const suggestions = ({
     ru: ["Найди музеи в Кракове и покажи их на карте.", "Составь маршрут на один день по Варшаве, пешком.", "Землетрясения сильнее 3 у Норчи за неделю.", "Какие данные доступны и за какой период?"],

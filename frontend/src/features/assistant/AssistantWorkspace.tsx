@@ -104,7 +104,7 @@ export default function AssistantWorkspace() {
   // The request whose result is on the map, shown above it; the map keeps it while the next turn runs.
   const [resultQuery, setResultQuery] = useState(() => savedConversation.result ? lastUserMessage(savedConversation.messages) : "");
   const submittedQueryRef = useRef("");
-  // Follow-up requests of the latest answer, written by the model right after it; null when none are coming.
+  // Follow-up requests the model writes after the latest answer (FOLLOW_UPS_MODEL); null when none are coming.
   const [followUps, setFollowUps] = useState<{ requestId: string; status: "loading" | "none" } | null>(null);
   // The server always answers, but a dropped connection would leave the placeholders; they give way after a while.
   useEffect(() => {
@@ -212,11 +212,13 @@ export default function AssistantWorkspace() {
               ...(frame.models?.length ? { models: frame.models } : {}),
               ...(result.places || result.records || result.tripDays ? { result } : {}),
               ...(frame.citations?.length ? { citations: frame.citations, citationsMode: frame.citationsMode ?? "cited" } : {}),
+              ...(frame.suggestions?.length ? { suggestions: frame.suggestions } : {}),
             };
             // The streamed text is replaced by the final message, which is the authoritative version.
             setMessages((current) => current.at(-1)?.streaming ? [...current.slice(0, -1), reply] : [...current, reply]);
-            // The model writes follow-up requests next; until they come, the answer shows placeholders.
-            setFollowUps({ requestId: frame.requestId, status: "loading" });
+            // The server sends follow-ups with the answer. Only a server that leaves them out writes them with the
+            // model afterwards; until they come, the answer shows placeholders.
+            setFollowUps(frame.suggestions ? null : { requestId: frame.requestId, status: "loading" });
             break;
           }
           case "turn.suggestions": {
@@ -396,8 +398,9 @@ export default function AssistantWorkspace() {
   }
 
   /**
-   * The follow-ups under the latest answer: the model's, placeholders while it writes them, or, when it wrote none
-   * (or after a reload), requests built from what is on the map. A new chat offers starter requests.
+   * The follow-ups under the latest answer: the server's (or the model's, which replace them), placeholders while the
+   * model writes them, or, when there are none (or after a reload), requests built from what is on the map. A new chat
+   * offers starter requests.
    */
   function followUpsFor(message: Message, index: number): { items: SuggestedRequest[]; loading: boolean } | null {
     if (pending || index !== messages.length - 1 || message.role !== "assistant") return null;
