@@ -199,13 +199,13 @@
         {
           "allOf": [
             { "$ref": "#/$defs/base" },
-            { "type": "object", "required": ["requestId", "tool", "label"], "properties": { "type": { "const": "tool.started" }, "tool": { "enum": ["search_records", "get_record_details", "search_places", "list_sources", "search_events", "plan_trip", "edit_trip_plan"] }, "label": { "type": "string", "maxLength": 160 } } }
+            { "type": "object", "required": ["requestId", "tool", "label"], "properties": { "type": { "const": "tool.started" }, "tool": { "enum": ["search_records", "get_record_details", "search_places", "list_sources", "search_events", "plan_trip", "edit_trip_plan", "route_places"] }, "label": { "type": "string", "maxLength": 160 } } }
           ]
         },
         {
           "allOf": [
             { "$ref": "#/$defs/base" },
-            { "type": "object", "required": ["requestId", "tool", "recordsFound"], "properties": { "type": { "const": "tool.completed" }, "tool": { "enum": ["search_records", "get_record_details", "search_places", "list_sources", "search_events", "plan_trip", "edit_trip_plan"] }, "recordsFound": { "type": "integer", "minimum": 0 } } }
+            { "type": "object", "required": ["requestId", "tool", "recordsFound"], "properties": { "type": { "const": "tool.completed" }, "tool": { "enum": ["search_records", "get_record_details", "search_places", "list_sources", "search_events", "plan_trip", "edit_trip_plan", "route_places"] }, "recordsFound": { "type": "integer", "minimum": 0 } } }
           ]
         },
         {
@@ -268,7 +268,8 @@
                 "sources": { "type": "array", "items": { "$ref": "#/$defs/source" } },
                 "citations": { "type": "array", "maxItems": 20, "items": { "$ref": "#/$defs/citation" } },
                 "citationsMode": { "enum": ["cited", "shown_to_model"] },
-                "models": { "type": "array", "maxItems": 4, "items": { "type": "string", "maxLength": 120 }, "description": "Models this turn called, in order of first use." }
+                "models": { "type": "array", "maxItems": 4, "items": { "type": "string", "maxLength": 120 }, "description": "Models this turn called, in order of first use." },
+                "suggestions": { "type": "array", "maxItems": 3, "items": { "type": "object", "required": ["label", "prompt"], "properties": { "label": { "type": "string", "maxLength": 60 }, "prompt": { "type": "string", "maxLength": 240 } } }, "description": "Follow-up requests built by the server from what this turn did; each is something the app can do." }
               }
             }
           ]

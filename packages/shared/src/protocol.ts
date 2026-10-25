@@ -5,7 +5,7 @@
  */
 import type { SyncSummary } from "./investigation.js";
 export type AssistantStatus = "ready" | "model_unavailable" | "data_unavailable" | "starting";
-export type ToolName = "search_records" | "get_record_details" | "search_places" | "list_sources" | "search_events" | "plan_trip" | "edit_trip_plan";
+export type ToolName = "search_records" | "get_record_details" | "search_places" | "list_sources" | "search_events" | "plan_trip" | "edit_trip_plan" | "route_places";
 export type Language = "en" | "ru" | "de";
 export type VoiceErrorCode = "voice_disabled" | "invalid_message" | "busy" | "rate_limited" | "provider_unavailable" | "timeout" | "internal_error";
 
@@ -215,7 +215,7 @@ export type ServerFrame =
   | (ClientBase & { type: "turn.clarification"; conversationId: string; message: string; choices: Array<{ id: string; label: string }>; fields?: ClarificationField[] })
   /** Follow-up requests written by the model after an answer; "none" when it could not write them (the client uses its own). */
   | (ClientBase & { type: "turn.suggestions"; suggestions: SuggestedRequest[]; source: "model" | "none" })
-  | (ClientBase & { type: "turn.completed"; conversationId: string; assistantMessage: string; appliedFilters: Array<Record<string, unknown>>; result: { total: number; records: RecordView[]; places?: PlaceView[]; tripPlan?: TripPlan; searchArea?: SearchArea; mapFeatures: GeoJSON.FeatureCollection }; sources: SourceView[]; citations?: Citation[]; citationsMode?: "cited" | "shown_to_model"; models?: string[] })
+  | (ClientBase & { type: "turn.completed"; conversationId: string; assistantMessage: string; appliedFilters: Array<Record<string, unknown>>; result: { total: number; records: RecordView[]; places?: PlaceView[]; tripPlan?: TripPlan; searchArea?: SearchArea; mapFeatures: GeoJSON.FeatureCollection }; sources: SourceView[]; citations?: Citation[]; citationsMode?: "cited" | "shown_to_model"; models?: string[]; suggestions?: SuggestedRequest[] })
   | (ClientBase & { type: "turn.cancelled" })
   | (ClientBase & { type: "turn.error"; code: string; message: string; retryable: boolean })
   | (ClientBase & { type: "voice.ready" })

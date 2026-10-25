@@ -128,7 +128,7 @@ export function attachWebSocket(server: Server): (code: number, reason: string) 
           }
           send(websocket, { protocolVersion: 1, type: "turn.accepted", requestId: clientFrame.requestId, conversationId });
           let followUp: FollowUpContext | null = null;
-          await processTurn(clientFrame, conversationId, controller.signal, (event) => send(websocket, event), { onFollowUp: (context) => { followUp = context; } });
+          await processTurn(clientFrame, conversationId, controller.signal, (event) => send(websocket, event), env.FOLLOW_UPS_MODEL ? { onFollowUp: (context) => { followUp = context; } } : {});
           if (followUp && !controller.signal.aborted) {
             const current = new AbortController();
             followUps = current;

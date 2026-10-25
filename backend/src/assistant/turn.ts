@@ -1,7 +1,7 @@
 import type { ClarificationField, ClientFrame, PlaceView, RecordView, ServerFrame, ToolName, TripPlan } from "@waypoint-ai/shared";
 import { env } from "../config/env.js";
 import { placeCoverage } from "../data/coverage.js";
-import { getConversationMessages, getConversationTripPlan, saveConversationTurn as saveTurnToHistory } from "../data/conversation.repository.js";
+import { getConversationMessages, getConversationPlaceIds, getConversationTripPlan, saveConversationTurn as saveTurnToHistory, type HistoryMessage } from "../data/conversation.repository.js";
 import { recordTurn as journalTurn, type NewJournalEntry } from "../data/journal.repository.js";
 import { getPlacesByIds, getSources } from "../data/record.repository.js";
 import { enabledLessons, markLessonsApplied } from "../data/training.repository.js";
@@ -12,14 +12,17 @@ import { assistantToolDefinitions, executeAssistantTool, type SearchArea, type T
 import { EDIT_TRIP_PLAN_TOOL, editTripPlanToolDefinition } from "../tools/edit-trip-plan.js";
 import { PLAN_TRIP_TOOL, planTripToolDefinition } from "../tools/plan-trip.js";
 import { REPLY_TOOL, replyToolDefinition } from "../tools/reply.js";
+import { ROUTE_PLACES_TOOL, routePlacesArgsValid, routePlacesToolDefinition } from "../tools/route-places.js";
 import { normalizeToolArguments } from "../tools/search-events.js";
 import { CitationRegistry, stripCitationRefs } from "./citations.js";
 import { text, toolLabel } from "./copy.js";
 import { buildLessonBlock, type AppliedLesson, type Lesson } from "./lessons.js";
 import type { FollowUpContext } from "./follow-ups.js";
+import { templateFollowUps, type FollowUpFacts } from "./follow-up-templates.js";
 import { formatPlaceResultsMessage } from "./place-results-message.js";
 import { classifyPlanIntent, type PlanIntent } from "./plan-intent.js";
 import { executePlanTrip } from "./plan-trip.js";
+import { buildRoutePlan, formatRoutePlacesMessage } from "./route-places.js";
 import { parseRouterOutput, ROUTER_FORMAT, routerMessages } from "./router.js";
 import { describePlanForModel, type TripPlanChange } from "./trip-plan-edit.js";
 import { formatTripPlanEditMessage, formatTripPlanMessage } from "./trip-plan-message.js";
@@ -75,6 +78,8 @@ type ToolOutcome = {
   usedOtherDataTool: boolean;
   editedPlan: (EditablePlan & { changes: TripPlanChange[] }) | null;
   createdPlan: EditablePlan | null;
+  /** The created plan is a route through the places of a search, not a planned trip. */
+  routedPlaces: boolean;
   /** A question with one-time filters, asked instead of guessing a missing detail. */
   clarification: { message: string; fields: ClarificationField[] } | null;
 };
@@ -125,12 +130,25 @@ export async function processTurn(
   // The plan this conversation already shows; when set, the turn edits it instead of planning from scratch.
   let editablePlan: EditablePlan | null = null;
   let history: ChatMessage[] = [];
+  // What this turn adds to the history after the user's message: each executed tool call with a short summary of its
+  // result. The model then sees on later turns that answers came from tools, instead of answer texts to imitate.
+  const historyCalls: HistoryMessage[] = [];
+  const recordCall = (name: string, args: unknown, summary: Record<string, unknown>, placeIds?: string[]) => {
+    historyCalls.push({ role: "assistant", content: "", tool_calls: [{ type: "function", function: { name, arguments: args } }] });
+    historyCalls.push({ role: "tool", tool_name: name, content: JSON.stringify(summary), ...(placeIds?.length ? { placeIds } : {}) });
+  };
+  const turnHistory = (answer: string | null): HistoryMessage[] => [
+    { role: "user", content: frame.message },
+    ...historyCalls,
+    // The fallback text of a failed turn is not kept: a small model would repeat it on the next turn.
+    ...(answer && answer !== notProcessedText(language) ? [{ role: "assistant" as const, content: answer }] : []),
+  ];
 
   const emitTripPlan = async (plan: TripPlan, places: PlaceView[], message: string, tool: ToolName) => {
     const sources = await getSources(plan.sourceIds);
     // The model sees the stored plan in full on the next turn, so history keeps only the reply's first paragraph
     // (what was built or changed) and the small context window is not filled with stop lists.
-    await saveConversationTurn(conversationId, workspaceId, [...history, { role: "user", content: frame.message }, { role: "assistant", content: message.split("\n\n")[0]! }], plan);
+    await saveConversationTurn(conversationId, workspaceId, turnHistory(message.split("\n\n")[0]!), plan);
     turnOutcome = "completed";
     reporter.sections(message);
     followUp(message, `trip plan: ${plan.cities?.map((city) => city.name).join(", ") || plan.city}, ${plan.totalDays} days, ${plan.travelMode === "driving" ? "driving route per day" : "places only"}`, "trip");
@@ -141,6 +159,7 @@ export async function processTurn(
       ], result: {
         total: places.length, records: [], places, tripPlan: plan, mapFeatures: { type: "FeatureCollection", features: places.map(placeFeature) },
       }, sources,
+      suggestions: templateFollowUps({ topic: "trip", days: plan.totalDays, travelMode: plan.travelMode }, language),
     });
   };
   const callModel = async (callMessages: ChatMessage[], tools: ToolDefinition[], callOptions: ChatOptions = {}) => {
@@ -219,22 +238,22 @@ export async function processTurn(
       // Earlier edits are stored as plain confirmations ("Added to day 1: …") because history drops tool calls.
       // A small model imitates them and confirms the next change in text without calling the tool, so the edit
       // call sees the user's messages and the current plan only.
-      messages = messages.filter((entry, index) => index === 0 || entry.role !== "assistant");
+      messages = messages.filter((entry) => entry.role === "system" || entry.role === "user");
     }
     const toolsForTurn = planIntent === "change_plan"
       ? [editTripPlanToolDefinition, replyToolDefinition]
       : planIntent === "new_trip"
         ? [planTripToolDefinition, replyToolDefinition]
         : editablePlan
-          ? [planTripToolDefinition, editTripPlanToolDefinition, ...assistantToolDefinitions, replyToolDefinition]
-          : [planTripToolDefinition, ...assistantToolDefinitions, replyToolDefinition];
+          ? [planTripToolDefinition, editTripPlanToolDefinition, ...assistantToolDefinitions, routePlacesToolDefinition, replyToolDefinition]
+          : [planTripToolDefinition, ...assistantToolDefinitions, routePlacesToolDefinition, replyToolDefinition];
     let finalText = "";
     let finished = false;
     let retriedWithoutTool = false;
     // What the tool calls produced; kept in one object because the tools run in closures.
-    const produced: ToolOutcome = { lastPlaceSearch: null, usedOtherDataTool: false, editedPlan: null, createdPlan: null, clarification: null };
+    const produced: ToolOutcome = { lastPlaceSearch: null, usedOtherDataTool: false, editedPlan: null, createdPlan: null, routedPlaces: false, clarification: null };
     // A question this turn asked already is not asked again when the user answers it in their own words.
-    const lastAssistant = [...conversationHistory].reverse().find((entry) => entry.role === "assistant")?.content ?? "";
+    const lastAssistant = [...conversationHistory].reverse().find((entry) => entry.role === "assistant" && !entry.tool_calls?.length)?.content ?? "";
     let replyRequested = false;
     let thinking = reporter.step(text(language, "Понимаю запрос", "Understanding the request"));
     const routerModel = options.routerModel === undefined ? env.ROUTER_MODEL ?? null : options.routerModel;
@@ -272,6 +291,7 @@ export async function processTurn(
         step.done(outcome.kind === "planned" ? text(language, `${outcome.plan.totalDays} дн., ${outcome.places.length} точек`, `${outcome.plan.totalDays} days, ${outcome.places.length} stops`) : text(language, "нужно выбрать маршрут", "route choice needed"));
       }
       messages.push({ role: "tool", tool_name: PLAN_TRIP_TOOL, content: JSON.stringify(outcome.kind === "error" ? { error: outcome.error } : { ok: true }) });
+      if (outcome.kind !== "ask_route_mode") recordCall(PLAN_TRIP_TOOL, normalizeToolArguments(call.function.arguments), outcome.kind === "error" ? { error: outcome.error } : { ok: true, days: outcome.plan.totalDays, stops: outcome.places.length });
       completed(outcome.kind === "planned" ? outcome.places.length : 0);
     };
     const editTripPlan = async (call: ToolCall, journalCall: JournalCall) => {
@@ -287,7 +307,36 @@ export async function processTurn(
         step.fail(toolFailedDetail(language));
       }
       messages.push({ role: "tool", tool_name: EDIT_TRIP_PLAN_TOOL, content: JSON.stringify(outcome.ok ? { ok: true, changes: outcome.changes } : { error: outcome.error }) });
+      recordCall(EDIT_TRIP_PLAN_TOOL, normalizeToolArguments(call.function.arguments), outcome.ok ? { ok: true } : { error: outcome.error });
       completed(outcome.ok ? outcome.places.length : 0);
+    };
+    const routePlaces = async (call: ToolCall, journalCall: JournalCall) => {
+      const { outcome, step, completed } = await runTool(ROUTE_PLACES_TOOL, call, text(language, "Строю маршрут по найденным местам", "Building a route through the found places"), async () => {
+        if (!routePlacesArgsValid(call.function.arguments)) return { error: "route_places takes no arguments." };
+        // The places of a search in this turn, or else those of the conversation's latest place search.
+        let places = produced.lastPlaceSearch?.places ?? [];
+        let label = produced.lastPlaceSearch?.search.city ?? null;
+        if (!places.length) {
+          const ids = await getConversationPlaceIds(conversationId, workspaceId);
+          const byId = new Map((await getPlacesByIds(ids)).map((place) => [place.id, place]));
+          places = ids.flatMap((id) => byId.get(id) ?? []);
+          label = lastSearchCity(history);
+        }
+        if (places.length < 2) return { error: "There are no found places in this conversation to route through. Ask what to search for, or call search_places first." };
+        const plan = buildRoutePlan(places, label);
+        return { plan, places };
+      });
+      if ("error" in outcome) {
+        journalCall.error = outcome.error;
+        step.fail(toolFailedDetail(language));
+      } else {
+        produced.createdPlan = outcome;
+        produced.routedPlaces = true;
+        step.done(text(language, `${outcome.places.length} точек`, `${outcome.places.length} stops`));
+      }
+      messages.push({ role: "tool", tool_name: ROUTE_PLACES_TOOL, content: JSON.stringify("error" in outcome ? { error: outcome.error } : { ok: true }) });
+      recordCall(ROUTE_PLACES_TOOL, {}, "error" in outcome ? { error: outcome.error } : { ok: true, days: outcome.plan.totalDays, stops: outcome.places.length });
+      completed("error" in outcome ? 0 : outcome.places.length);
     };
     const searchData = async (toolName: ToolName, call: ToolCall, journalCall: JournalCall) => {
       // An earthquake search without a period would show the default week; the user picks the details instead.
@@ -320,6 +369,7 @@ export async function processTurn(
       }
       if (result.sourceIds) listedSourceIds = result.sourceIds;
       if (result.searchArea) searchArea = result.searchArea;
+      recordCall(toolName, normalizeToolArguments(call.function.arguments), historySummary(result, resultError), result.placeSearch ? result.places?.map((place) => place.id) : undefined);
       completed(result.resultsFound);
       if (resultError !== null) step.fail(toolFailedDetail(language));
       else step.done(text(language, `найдено: ${result.resultsFound}`, `found: ${result.resultsFound}`));
@@ -404,6 +454,7 @@ export async function processTurn(
         lastTool = toolName;
         if (toolName === PLAN_TRIP_TOOL) await planTrip(call, journalCall);
         else if (toolName === EDIT_TRIP_PLAN_TOOL) await editTripPlan(call, journalCall);
+        else if (toolName === ROUTE_PLACES_TOOL) await routePlaces(call, journalCall);
         else await searchData(toolName, call, journalCall);
         if (produced.clarification) break;
       }
@@ -439,7 +490,7 @@ export async function processTurn(
     }
     if (produced.clarification) {
       const { message, fields } = produced.clarification;
-      await saveConversationTurn(conversationId, workspaceId, [...history, { role: "user", content: frame.message }, { role: "assistant", content: message }]);
+      await saveConversationTurn(conversationId, workspaceId, [{ role: "user", content: frame.message }, { role: "assistant", content: message }]);
       turnOutcome = "completed";
       emit({ protocolVersion: 1, type: "turn.clarification", requestId: frame.requestId, conversationId, message, choices: [], fields });
       return;
@@ -447,7 +498,8 @@ export async function processTurn(
     const { createdPlan: newPlan, editedPlan: changedPlan } = produced;
     if (newPlan || changedPlan) reporter.step(text(language, "Собираю ответ из проверенных данных", "Assembling the answer from verified data")).done();
     if (newPlan) {
-      await emitTripPlan(newPlan.plan, newPlan.places, formatTripPlanMessage(newPlan.plan, newPlan.places, language), PLAN_TRIP_TOOL);
+      if (produced.routedPlaces) await emitTripPlan(newPlan.plan, newPlan.places, formatRoutePlacesMessage(newPlan.plan, newPlan.places, language), ROUTE_PLACES_TOOL);
+      else await emitTripPlan(newPlan.plan, newPlan.places, formatTripPlanMessage(newPlan.plan, newPlan.places, language), PLAN_TRIP_TOOL);
       return;
     }
     if (changedPlan) {
@@ -467,11 +519,32 @@ export async function processTurn(
     const sourceIds = [...new Set(found.map((record) => record.sourceId))];
     const allSourceIds = [...new Set([...sourceIds, ...placesFound.map((place) => place.sourceId), ...listedSourceIds])];
     const sources = await getSources(allSourceIds);
-    // The final model reply is already in `messages` from the loop; pushing it again stored every answer twice.
-    await saveConversationTurn(conversationId, workspaceId, messages.map((message) => message.role === "assistant" ? { ...message, content: stripCitationRefs(message.content) } : message));
+    // A place list is kept as its first line and the names; the rows themselves are in the tool summary.
+    const placeAnswer = produced.lastPlaceSearch && !produced.usedOtherDataTool ? finalText.split("\n\n")[0]! : null;
+    await saveConversationTurn(conversationId, workspaceId, turnHistory(stripCitationRefs(placeAnswer ?? finalText)));
     turnOutcome = "completed";
     if (!streamed) reporter.sections(finalText);
     const keptPlan = keepPlan ? `trip plan: ${keepPlan.plan.city}, ${keepPlan.plan.totalDays} days` : null;
+    // What the follow-ups are built from: the turn's last search and its validated arguments.
+    const followUpFacts = (): FollowUpFacts => {
+      if (lastTool === "search_events") {
+        const args = ([...journalCalls].reverse().find((call) => call.tool === "search_events")?.args ?? {}) as { hours?: unknown; minMagnitude?: unknown; place?: unknown };
+        return {
+          topic: "events",
+          place: searchArea?.label ?? (typeof args.place === "string" ? args.place.slice(0, 100) : null),
+          radiusKm: searchArea?.radiusKm ?? null,
+          hours: typeof args.hours === "number" ? args.hours : null,
+          minMagnitude: typeof args.minMagnitude === "number" ? args.minMagnitude : null,
+        };
+      }
+      if (keepPlan) return { topic: "trip", days: keepPlan.plan.totalDays, travelMode: keepPlan.plan.travelMode };
+      const search = produced.lastPlaceSearch;
+      if (search && !produced.usedOtherDataTool) {
+        const city = search.search.city ?? search.places.find((place) => place.city)?.city ?? null;
+        return { topic: "places", city, kind: search.search.kind, shown: search.places.length, total: search.total, offset: search.search.offset };
+      }
+      return { topic: "other" };
+    };
     followUp(finalText, found.length
       ? `${totalRecords} earthquakes${searchArea ? ` within ${searchArea.radiusKm} km of ${searchArea.label}` : ""}`
       : placesFound.length && !keepPlan
@@ -492,6 +565,7 @@ export async function processTurn(
         mapFeatures: mapFeatures(found, placesFound),
       }, sources,
       ...(cited.citations.length ? { citations: cited.citations, citationsMode: cited.citationsMode } : {}),
+      suggestions: templateFollowUps(followUpFacts(), language),
     });
   } catch (error) {
     if (signal.aborted) {
@@ -510,6 +584,29 @@ export async function processTurn(
     console.info("Assistant turn performance", { requestId: frame.requestId, outcome: turnOutcome, model: env.OLLAMA_MODEL, ...metrics.summary() });
     releaseInference();
   }
+}
+
+/** What the history keeps of a search: counts and names, enough for "more", "these places", or "the same again". */
+function historySummary(result: ToolExecutionResult, error: string | null): Record<string, unknown> {
+  if (error) return { error };
+  if (result.placeSearch) {
+    const places = result.places ?? [];
+    return { total: result.totalPlaces ?? places.length, shown: places.length, ...(result.placeSearch.offset ? { offset: result.placeSearch.offset } : {}), places: places.map((place) => place.name) };
+  }
+  if (result.records) return { total: result.totalRecords ?? result.records.length, shown: result.records.length, ...(result.searchArea ? { area: `${result.searchArea.radiusKm} km around ${result.searchArea.label}` } : {}) };
+  if (result.sourceIds) return { sources: result.sourceIds.length };
+  return { found: result.resultsFound };
+}
+
+/** The city of the conversation's latest place search, as the model named it. */
+function lastSearchCity(history: ChatMessage[]): string | null {
+  for (const entry of [...history].reverse()) {
+    const call = entry.tool_calls?.find((item) => item.function.name === "search_places");
+    if (!call) continue;
+    const args = normalizeToolArguments(call.function.arguments) as { city?: unknown } | null;
+    return typeof args?.city === "string" ? args.city.slice(0, 120) : null;
+  }
+  return null;
 }
 
 /** The journal row of a turn: its tool calls with their outcomes, how it ended, and the signals of a likely failure. */

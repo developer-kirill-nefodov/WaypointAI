@@ -64,7 +64,7 @@ const runSchema = z.object({
   origins: z.array(z.enum(["starter", "manual", "generated", "hard", "journal"])).max(5).optional(),
 }).strict();
 const generateSchema = z.object({ perSkill: z.number().int().min(5).max(60).default(20), seed: z.number().int().min(0).max(1_000_000).default(1) }).strict();
-const SKILL_OF_TOOL: Record<string, string> = { search_places: "places", search_events: "events", plan_trip: "trips", edit_trip_plan: "trips", list_sources: "sources", reply: "reply" };
+const SKILL_OF_TOOL: Record<string, string> = { search_places: "places", search_events: "events", plan_trip: "trips", edit_trip_plan: "trips", route_places: "trips", list_sources: "sources", reply: "reply" };
 
 /** Lessons, the exam, and its runs: `/api/v1/training`. */
 export function createTrainingRouter(deps: TrainingDependencies): Router {

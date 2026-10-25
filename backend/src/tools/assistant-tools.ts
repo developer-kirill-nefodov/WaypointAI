@@ -19,6 +19,9 @@ const recordDetailsArgs = z.object({ id: z.string().min(1).max(120) }).strict();
 export const PLACE_KINDS: Record<string, readonly (string | undefined)[]> = { ...TRIP_STOP_CATEGORIES, hotel: ["tourism:hotel"], any: [undefined] };
 const SIGHTSEEING = [...TRIP_STOP_CATEGORIES.attraction, ...TRIP_STOP_CATEGORIES.museum];
 
+/** A city search keeps the 50 nearest places per kind, so pages of ten reach offset 40. */
+const MAX_PLACE_OFFSET = 40;
+
 export const searchPlacesArgs = z.object({
   query: z.string().max(100).optional(),
   kind: z.enum(Object.keys(PLACE_KINDS) as [string, ...string[]]).optional(),
@@ -26,6 +29,7 @@ export const searchPlacesArgs = z.object({
   countryCode: z.string().regex(/^[A-Z]{2}$/).optional(),
   city: z.string().max(120).optional(),
   limit: z.number().int().min(1).max(50).optional(),
+  offset: z.number().int().min(0).max(MAX_PLACE_OFFSET).optional(),
 }).strict();
 const listSourcesArgs = z.object({}).strict();
 
@@ -64,6 +68,7 @@ export const assistantToolDefinitions: ToolDefinition[] = [
         countryCode: { type: "string", pattern: "^[A-Z]{2}$" },
         city: { type: "string", maxLength: 120 },
         limit: { type: "integer", minimum: 1, maximum: 50 },
+        offset: { type: "integer", minimum: 0, maximum: MAX_PLACE_OFFSET, description: "Skip this many results. For more or other places than those already listed, repeat the earlier search with offset = its offset + the number it showed." },
       } },
     },
   },
@@ -94,7 +99,7 @@ export interface ToolExecutionResult {
   places?: PlaceView[];
   totalPlaces?: number;
   /** What a place search looked for, so the reply can say it from the request rather than from the model. */
-  placeSearch?: { kind: string | null; city: string | null; query: string | null; category: string | null };
+  placeSearch?: { kind: string | null; city: string | null; query: string | null; category: string | null; offset: number };
   sourceIds?: string[];
   resultsFound: number;
 }
@@ -150,13 +155,14 @@ export async function executeAssistantTool(
     const parsed = searchPlacesArgs.safeParse(rawArgs);
     if (!parsed.success) return { content: { error: "Invalid place search parameters." }, resultsFound: 0 };
     const limit = Math.min(parsed.data.limit ?? 10, 10);
-    const result = await searchPlacesInCity({ ...parsed.data, limit, sourceIds });
+    const offset = parsed.data.offset ?? 0;
+    const result = await searchPlacesInCity({ ...parsed.data, limit, offset, sourceIds });
     const places = result.places as PlaceView[];
     return {
-      content: { total: result.total, ...(places.length ? {} : { hint: "No matches. Place and city names in the snapshot use their local spelling (Warszawa, Roma, București). If the request named a city, retry once with that city in the city field and no query." }), places: places.map((place) => ({ id: place.id, name: place.name, category: place.category, countryCode: place.countryCode, city: place.city, postcode: place.postcode, street: place.street, houseNumber: place.houseNumber, details: place.details, lat: place.lat, lon: place.lon })) },
+      content: { total: result.total, ...(offset ? { offset } : {}), ...(places.length ? {} : { hint: "No matches. Place and city names in the snapshot use their local spelling (Warszawa, Roma, București). If the request named a city, retry once with that city in the city field and no query." }), places: places.map((place) => ({ id: place.id, name: place.name, category: place.category, countryCode: place.countryCode, city: place.city, postcode: place.postcode, street: place.street, houseNumber: place.houseNumber, details: place.details, lat: place.lat, lon: place.lon })) },
       places,
       totalPlaces: result.total,
-      placeSearch: { kind: parsed.data.kind ?? null, city: parsed.data.city ?? null, query: parsed.data.query ?? null, category: parsed.data.category ?? null },
+      placeSearch: { kind: parsed.data.kind ?? null, city: parsed.data.city ?? null, query: parsed.data.query ?? null, category: parsed.data.category ?? null, offset },
       resultsFound: places.length,
     };
   }
@@ -214,8 +220,11 @@ const CITY_RADIUS_METERS: Record<string, number> = { "place:city": 8_000, "place
  * Most OSM rows carry no address city, so a city filter alone misses most places in it. A named city is resolved to
  * its verified settlement (local or English name) and searched by radius; the address field is the fallback.
  */
-async function searchPlacesInCity(input: z.infer<typeof searchPlacesArgs> & { limit: number; sourceIds?: string[] }) {
-  const { kind, ...rest } = input;
+async function searchPlacesInCity(input: z.infer<typeof searchPlacesArgs> & { limit: number; offset: number; sourceIds?: string[] }) {
+  // Each list is fetched up to the end of the requested page; the merged order is the same for every page.
+  const { kind, offset, limit: pageSize, ...search } = input;
+  const end = offset + pageSize;
+  const rest = { ...search, limit: end };
   // A city with no kind, category, or name would return whatever rows are nearest (mostly bare addresses),
   // so it means sights: attractions and museums.
   const categories = input.category
@@ -231,12 +240,12 @@ async function searchPlacesInCity(input: z.infer<typeof searchPlacesArgs> & { li
         center: { lat: settlement.lat, lon: settlement.lon },
         radiusMeters: CITY_RADIUS_METERS[settlement.category] ?? 2_500,
       })));
-      const named = interleave(results.map((result) => result.places.filter((place) => /\p{L}/u.test(place.name)))).slice(0, input.limit);
-      if (named.length) return { total: results.reduce((sum, result) => sum + result.total, 0), places: named };
+      const named = interleave(results.map((result) => result.places.filter((place) => /\p{L}/u.test(place.name))));
+      if (named.length) return { total: results.reduce((sum, result) => sum + result.total, 0), places: named.slice(offset, end) };
     }
   }
   const results = await Promise.all(categories.map((category) => searchPlaces({ ...rest, category })));
-  return { total: results.reduce((sum, result) => sum + result.total, 0), places: interleave(results.map((result) => result.places)).slice(0, input.limit) };
+  return { total: results.reduce((sum, result) => sum + result.total, 0), places: interleave(results.map((result) => result.places)).slice(offset, end) };
 }
 
 /** Alternates between result lists so a kind with several categories shows some of each. */

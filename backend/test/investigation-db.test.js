@@ -277,6 +277,29 @@ test("keeps the trip plan of a conversation across turns until it is replaced or
   await sql("DELETE FROM assistant_conversations WHERE workspace_id = 'test-workspace'");
 });
 
+test("appends turns with their tool calls and keeps the found places on the server", { skip }, async () => {
+  const { conversations } = modules;
+  const id = "8b0e7c1e-5f0a-4a51-9a51-0c6a39a5e002";
+  await sql("DELETE FROM assistant_conversations WHERE workspace_id = 'test-workspace'");
+  await conversations.saveConversationTurn(id, "test-workspace", [
+    { role: "user", content: "Sights in Testopoli" },
+    { role: "assistant", content: "", tool_calls: [{ type: "function", function: { name: "search_places", arguments: { kind: "attraction", city: "Testopoli" } } }] },
+    { role: "tool", tool_name: "search_places", content: JSON.stringify({ total: 2, shown: 2, places: ["Near 1", "Near 2"] }), placeIds: ["p-near-1", "p-near-2"] },
+    { role: "assistant", content: "Found 2." },
+    { role: "system", content: "not stored" },
+  ]);
+  // A failed turn adds only the user's message.
+  await conversations.saveConversationTurn(id, "test-workspace", [{ role: "user", content: "More, except those" }]);
+  const history = await conversations.getConversationMessages(id, "test-workspace");
+  assert.deepEqual(history.map((message) => message.role), ["user", "assistant", "tool", "assistant", "user"]);
+  assert.deepEqual(history[1].tool_calls, [{ type: "function", function: { index: 0, name: "search_places", arguments: { kind: "attraction", city: "Testopoli" } } }]);
+  assert.equal(history[2].tool_name, "search_places");
+  assert.equal("placeIds" in history[2], false, "place IDs are not sent to the model");
+  assert.deepEqual(await conversations.getConversationPlaceIds(id, "test-workspace"), ["p-near-1", "p-near-2"]);
+  assert.deepEqual(await conversations.getConversationPlaceIds(id, "other-workspace"), []);
+  await sql("DELETE FROM assistant_conversations WHERE workspace_id = 'test-workspace'");
+});
+
 test("stores import jobs per workspace and fails the ones left running by a stopped server", { skip }, async () => {
   const { importJobs } = modules;
   await sql("DELETE FROM import_jobs WHERE workspace_id LIKE 'test-%'");

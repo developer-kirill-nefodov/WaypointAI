@@ -28,7 +28,8 @@ export async function classifyPlanIntent(
   message: string,
   call: (messages: ChatMessage[], format: Record<string, unknown>) => Promise<ChatResult>,
 ): Promise<{ intent: PlanIntent; result: ChatResult }> {
-  const recent = history.filter((entry) => entry.role === "user" || entry.role === "assistant").slice(-4);
+  // Only the conversation text: tool calls and their results would leave empty or orphaned messages here.
+  const recent = history.filter((entry) => (entry.role === "user" || entry.role === "assistant") && !entry.tool_calls?.length).slice(-4);
   const result = await call([
     { role: "system", content: `${INTENT_PROMPT}\nPlan: ${planSummary}` },
     ...recent,

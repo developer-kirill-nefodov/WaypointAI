@@ -5,10 +5,11 @@ import { releaseInference, tryAcquireBackgroundInference } from "../llm/inferenc
 import { chat, type ChatMessage } from "../llm/ollama.provider.js";
 
 /**
- * Follow-up suggestions: after an answer, the local model writes three requests the user is likely to send next,
- * from the last exchange and what is on the map. The model runs one generation at a time, so this happens right
+ * Model-written follow-up suggestions (FOLLOW_UPS_MODEL=true): after an answer, the local model writes three requests
+ * the user is likely to send next, from the last exchange and what is on the map. They replace the server's
+ * (follow-up-templates.ts), which come with the answer. The model runs one generation at a time, so this happens right
  * after the answer, as background work that gives way to the next chat turn. Without a usable result the client
- * shows its own suggestions.
+ * keeps the server's suggestions.
  */
 
 /** What the suggestions are written from; set by a completed turn. */
@@ -73,7 +74,7 @@ export function followUpMessages(context: FollowUpContext): ChatMessage[] {
 }
 
 const answerSchema = z.object({ suggestions: z.array(z.object({ label: z.string(), prompt: z.string() })) });
-const FORBIDDEN = /[{}<>`\[\]]|https?:|www\.|\b(?:search_places|search_events|search_records|get_record_details|list_sources|plan_trip|edit_trip_plan|reply)\b/i;
+const FORBIDDEN = /[{}<>`\[\]]|https?:|www\.|\b(?:search_places|search_events|search_records|get_record_details|list_sources|plan_trip|edit_trip_plan|route_places|reply)\b/i;
 const normalize = (value: string) => value.toLocaleLowerCase().replace(/[^\p{L}\p{N}]+/gu, " ").trim();
 
 /** The model's suggestions that are safe to show: plain text of bounded length, distinct, not the last request. */

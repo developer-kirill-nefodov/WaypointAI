@@ -30,6 +30,9 @@ const envSchema = z.object({
   ROUTER_MODEL: z.preprocess((value) => value === "" ? undefined : value, z.string().min(1).max(120).optional()),
   JOURNAL_ENABLED: z.preprocess((value) => value === undefined || value === "" ? "true" : value, z.enum(["true", "false"]).transform((value) => value === "true")),
   JOURNAL_RETENTION_DAYS: z.coerce.number().int().min(1).max(365).default(30),
+  // Follow-up suggestions come with the answer, built by the server from the turn. With true, the local model also
+  // writes its own after the answer (about 20 s on a laptop) and they replace the server's.
+  FOLLOW_UPS_MODEL: z.preprocess((value) => value === undefined || value === "" ? "false" : value, z.enum(["true", "false"]).transform((value) => value === "true")),
   TRAINING_ENABLED: z.preprocess((value) => value === "" ? undefined : value, z.enum(["true", "false"]).transform((value) => value === "true").optional()),
 }).merge(modelEnvironmentSchema).merge(voiceEnvironmentSchema).merge(eventsEnvironmentSchema).merge(osmEnvironmentSchema).merge(teacherEnvironmentSchema);
 
